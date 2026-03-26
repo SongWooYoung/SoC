@@ -1,0 +1,12 @@
+.DS_Store
+**/.DS_Store
+
+build/
+**/build/
+
+*.o
+*.a
+*.out
+
+main
+**/main
