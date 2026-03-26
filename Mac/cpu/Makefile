@@ -5,23 +5,32 @@ CXXFLAGS := -O3 -std=c++17 -Wall -Wextra -Wpedantic -I.
 SRC_DIR := src
 BUILD_DIR := build
 TARGET := main
+TEST_TARGET := test_nn_ops
 MAIN_SRC := main.cpp
+TEST_SRC := test_nn_ops.cpp
 
-SRCS := $(wildcard $(SRC_DIR)/*.cpp)
-OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS)) $(BUILD_DIR)/main.o
+# Template implementations are in headers, no cpp files needed
+SRCS :=
+OBJS := $(BUILD_DIR)/main.o
+TEST_OBJS := $(BUILD_DIR)/test_nn_ops.o
 
-.PHONY: all run clean
+.PHONY: all run clean test
 
 all: $(TARGET)
+
+test: $(TEST_TARGET)
 
 $(TARGET): $(OBJS)
 	$(CXX) $^ -o $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
+$(TEST_TARGET): $(TEST_OBJS)
+	$(CXX) $^ -o $@
+
+$(BUILD_DIR)/main.o: $(MAIN_SRC)
 	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/main.o: $(MAIN_SRC)
+$(BUILD_DIR)/test_nn_ops.o: $(TEST_SRC)
 	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
@@ -30,3 +39,4 @@ run: $(TARGET)
 
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET)
+	rm -f *.a *.dylib *.so lib*.a lib*.dylib lib*.so
