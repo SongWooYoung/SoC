@@ -189,6 +189,10 @@ matrix<T> Softmax(const matrix<T>& a, int axis = 1) {
     
     matrix<T> result(rows, cols);
     T* result_data = result.raw_data();
+
+    if (rows == 0 || cols == 0) {
+        return result;
+    }
     
     if (axis == 1) {
         // Softmax over rows (most common for neural networks)
@@ -202,6 +206,11 @@ matrix<T> Softmax(const matrix<T>& a, int axis = 1) {
                 if (row_data[col] > max_val) {
                     max_val = row_data[col];
                 }
+            }
+
+            if (!std::isfinite(max_val)) {
+                std::fill(result_row, result_row + cols, T(0));
+                continue;
             }
             
             // Compute exp(x - max) and sum
@@ -253,6 +262,13 @@ matrix<T> Softmax(const matrix<T>& a, int axis = 1) {
                     max_val = val;
                 }
             }
+
+            if (!std::isfinite(max_val)) {
+                for (int row = 0; row < rows; ++row) {
+                    result_data[row * cols + col] = T(0);
+                }
+                continue;
+            }
             
             // Compute exp and sum
             T sum = T(0);
@@ -284,6 +300,10 @@ matrix<T> LogSoftmax(const matrix<T>& a, int axis = 1) {
     
     matrix<T> result(rows, cols);
     T* result_data = result.raw_data();
+
+    if (rows == 0 || cols == 0) {
+        return result;
+    }
     
     if (axis == 1) {
         for (int row = 0; row < rows; ++row) {

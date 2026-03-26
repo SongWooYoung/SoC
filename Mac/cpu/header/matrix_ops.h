@@ -4,9 +4,73 @@
 #include "header/matrix.h"
 #include <stdexcept>
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <vector>
 
 namespace {
 constexpr int matmul_block_size = 64;
+}
+
+template<typename T>
+struct PackedMatMulRhs {
+    matrix<T> transposed;
+    int shared_dim;
+    int output_dim;
+
+    explicit PackedMatMulRhs(const matrix<T>& rhs)
+        : transposed(rhs), shared_dim(rhs.row_count()), output_dim(rhs.col_count()) {
+        transposed.transpose();
+    }
+};
+
+template<typename T>
+PackedMatMulRhs<T> PackMatMulRhs(const matrix<T>& rhs) {
+    return PackedMatMulRhs<T>(rhs);
+}
+
+struct QuantizedPackedMatMulRhs8 {
+    int shared_dim;
+    int output_dim;
+    std::vector<int8_t> values;
+    std::vector<float> scales;
+
+    QuantizedPackedMatMulRhs8(int shared_dim, int output_dim)
+        : shared_dim(shared_dim), output_dim(output_dim), values(shared_dim * output_dim), scales(output_dim, 0.0f) {}
+};
+
+inline QuantizedPackedMatMulRhs8 QuantizeMatMulRhs8(const matrix<float>& rhs) {
+    const int shared_dim = rhs.row_count();
+    const int output_dim = rhs.col_count();
+    QuantizedPackedMatMulRhs8 packed(shared_dim, output_dim);
+
+    const float* rhs_data = rhs.raw_data();
+
+    for (int out_col = 0; out_col < output_dim; ++out_col) {
+        float max_abs = 0.0f;
+        for (int inner = 0; inner < shared_dim; ++inner) {
+            float value = rhs_data[inner * output_dim + out_col];
+            max_abs = std::max(max_abs, std::fabs(value));
+        }
+
+        if (max_abs == 0.0f) {
+            continue;
+        }
+
+        const float scale = max_abs / 127.0f;
+        const float inverse_scale = 1.0f / scale;
+        packed.scales[out_col] = scale;
+
+        int8_t* destination_row = packed.values.data() + out_col * shared_dim;
+        for (int inner = 0; inner < shared_dim; ++inner) {
+            float value = rhs_data[inner * output_dim + out_col] * inverse_scale;
+            int quantized = static_cast<int>(std::round(value));
+            quantized = std::clamp(quantized, -127, 127);
+            destination_row[inner] = static_cast<int8_t>(quantized);
+        }
+    }
+
+    return packed;
 }
 
 // ============================================================================
@@ -167,25 +231,20 @@ matrix<T> MatDivide(const matrix<T>& a, const matrix<T>& b) {
 // Matrix Multiplication: C = A @ B
 // Optimized with blocking and transpose
 template<typename T>
-matrix<T> MatMul(const matrix<T>& a, const matrix<T>& b) {
-    if (a.col_count() != b.row_count()) {
-        throw std::invalid_argument("matrix dimensions do not match for multiplication");
+matrix<T> MatMulTransposedB(const matrix<T>& a, const matrix<T>& b_transposed) {
+    if (a.col_count() != b_transposed.col_count()) {
+        throw std::invalid_argument("matrix dimensions do not match for multiplication with transposed rhs");
     }
 
     const int rows = a.row_count();
     const int shared = a.col_count();
-    const int cols = b.col_count();
-
-    // Transpose B for better cache locality
-    matrix<T> transposed_b(b);
-    transposed_b.transpose();
+    const int cols = b_transposed.row_count();
 
     matrix<T> result(rows, cols);
     const T* a_data = a.raw_data();
-    const T* bt_data = transposed_b.raw_data();
+    const T* bt_data = b_transposed.raw_data();
     T* result_data = result.raw_data();
 
-    // Blocked matrix multiplication for cache efficiency
     for (int row_block = 0; row_block < rows; row_block += matmul_block_size) {
         int row_limit = std::min(row_block + matmul_block_size, rows);
 
@@ -203,7 +262,6 @@ matrix<T> MatMul(const matrix<T>& a, const matrix<T>& b) {
                         const T* bt_row = bt_data + col * shared;
                         T sum = result_row[col];
 
-                        // Inner product with loop unrolling
                         int k = shared_block;
                         for (; k + 3 < shared_limit; k += 4) {
                             sum += a_row[k] * bt_row[k];
@@ -220,6 +278,71 @@ matrix<T> MatMul(const matrix<T>& a, const matrix<T>& b) {
                     }
                 }
             }
+        }
+    }
+
+    return result;
+}
+
+template<typename T>
+matrix<T> MatMul(const matrix<T>& a, const matrix<T>& b) {
+    if (a.col_count() != b.row_count()) {
+        throw std::invalid_argument("matrix dimensions do not match for multiplication");
+    }
+
+    matrix<T> transposed_b(b);
+    transposed_b.transpose();
+
+    return MatMulTransposedB(a, transposed_b);
+}
+
+template<typename T>
+matrix<T> MatMulPacked(const matrix<T>& a, const PackedMatMulRhs<T>& packed_b) {
+    if (a.col_count() != packed_b.shared_dim) {
+        throw std::invalid_argument("matrix dimensions do not match for packed multiplication");
+    }
+
+    return MatMulTransposedB(a, packed_b.transposed);
+}
+
+inline matrix<float> MatMulQuantized(const matrix<float>& a, const QuantizedPackedMatMulRhs8& packed_b) {
+    if (a.col_count() != packed_b.shared_dim) {
+        throw std::invalid_argument("matrix dimensions do not match for quantized multiplication");
+    }
+
+    const int rows = a.row_count();
+    const int shared_dim = a.col_count();
+    const int output_dim = packed_b.output_dim;
+
+    matrix<float> result(rows, output_dim);
+    const float* a_data = a.raw_data();
+    float* result_data = result.raw_data();
+
+    for (int row = 0; row < rows; ++row) {
+        const float* a_row = a_data + row * shared_dim;
+        float* result_row = result_data + row * output_dim;
+
+        for (int out_col = 0; out_col < output_dim; ++out_col) {
+            const float scale = packed_b.scales[out_col];
+            if (scale == 0.0f) {
+                result_row[out_col] = 0.0f;
+                continue;
+            }
+
+            const int8_t* packed_row = packed_b.values.data() + out_col * shared_dim;
+            float sum = 0.0f;
+            int inner = 0;
+            for (; inner + 3 < shared_dim; inner += 4) {
+                sum += a_row[inner] * static_cast<float>(packed_row[inner]);
+                sum += a_row[inner + 1] * static_cast<float>(packed_row[inner + 1]);
+                sum += a_row[inner + 2] * static_cast<float>(packed_row[inner + 2]);
+                sum += a_row[inner + 3] * static_cast<float>(packed_row[inner + 3]);
+            }
+            for (; inner < shared_dim; ++inner) {
+                sum += a_row[inner] * static_cast<float>(packed_row[inner]);
+            }
+
+            result_row[out_col] = sum * scale;
         }
     }
 
