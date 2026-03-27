@@ -188,14 +188,113 @@ def build_tokenizer_manifest(model_dir: Path, copied_files: list[str], auto_toke
 		"pad_token": tokenizer.pad_token,
 		"unk_token": tokenizer.unk_token,
 		"special_tokens_map": special_tokens_map,
-		"special_token_ids": {
-			token_name: tokenizer.convert_tokens_to_ids(token_value)
-			for token_name, token_value in special_tokens_map.items()
-			if isinstance(token_value, str)
-		},
+		"special_token_ids": build_special_token_ids(tokenizer, special_tokens_map),
 		"chat_template": getattr(tokenizer, "chat_template", None),
 		"copied_files": copied_files,
 	}
+
+
+def build_special_token_ids(tokenizer: Any, special_tokens_map: dict[str, Any]) -> dict[str, int]:
+	special_token_ids: dict[str, int] = {}
+	for token_name, token_value in special_tokens_map.items():
+		if not isinstance(token_value, str):
+			continue
+
+		try:
+			token_id = tokenizer.convert_tokens_to_ids(token_value)
+		except KeyError:
+			continue
+
+		if token_id is None:
+			continue
+
+		special_token_ids[token_name] = int(token_id)
+
+	return special_token_ids
+
+
+def serialize_added_tokens(tokenizer: Any) -> list[dict[str, Any]]:
+	added_tokens: list[dict[str, Any]] = []
+	for token_id, token_info in getattr(tokenizer, "added_tokens_decoder", {}).items():
+		content = getattr(token_info, "content", None)
+		if content is None:
+			content = str(token_info)
+
+		added_tokens.append(
+			{
+				"id": int(token_id),
+				"content": content,
+				"special": bool(getattr(token_info, "special", False)),
+				"single_word": bool(getattr(token_info, "single_word", False)),
+				"lstrip": bool(getattr(token_info, "lstrip", False)),
+				"rstrip": bool(getattr(token_info, "rstrip", False)),
+				"normalized": bool(getattr(token_info, "normalized", True)),
+			}
+		)
+
+	added_tokens.sort(key=lambda item: item["id"])
+	return added_tokens
+
+
+def build_vocab_entries(tokenizer: Any) -> list[dict[str, Any]]:
+	vocab = tokenizer.get_vocab()
+	vocab_entries = [{"token": token, "id": int(token_id)} for token, token_id in vocab.items()]
+	vocab_entries.sort(key=lambda item: item["id"])
+	return vocab_entries
+
+
+def detect_qwen3_template_runtime(tokenizer: Any) -> dict[str, Any]:
+	special_tokens_map = tokenizer.special_tokens_map
+	im_start = special_tokens_map.get("additional_special_tokens", ["<|im_start|>"])
+	im_start_token = "<|im_start|>"
+	im_end_token = "<|im_end|>"
+	if isinstance(im_start, list):
+		for token in im_start:
+			if token == "<|im_start|>":
+				im_start_token = token
+			if token == "<|im_end|>":
+				im_end_token = token
+
+	think_start = "<think>"
+	think_end = "</think>"
+	for token in getattr(tokenizer, "additional_special_tokens", []) or []:
+		if token == "<think>":
+			think_start = token
+		if token == "</think>":
+			think_end = token
+
+	return {
+		"type": "qwen3",
+		"im_start": im_start_token,
+		"im_end": im_end_token,
+		"think_start": think_start,
+		"think_end": think_end,
+		"default_system_prompt": "You are a helpful assistant.",
+	}
+
+
+def build_tokenizer_runtime_manifest(tokenizer: Any, copied_files: list[str]) -> dict[str, Any]:
+	special_tokens_map = tokenizer.special_tokens_map
+	return {
+		"format": "soc.cpp.tokenizer_runtime",
+		"format_version": 1,
+		"tokenizer_class": tokenizer.__class__.__name__,
+		"vocab_size": tokenizer.vocab_size,
+		"model_max_length": tokenizer.model_max_length,
+		"special_tokens_map": special_tokens_map,
+		"special_token_ids": build_special_token_ids(tokenizer, special_tokens_map),
+		"added_tokens": serialize_added_tokens(tokenizer),
+		"vocab": build_vocab_entries(tokenizer),
+		"chat_template": getattr(tokenizer, "chat_template", None),
+		"template_runtime": detect_qwen3_template_runtime(tokenizer),
+		"copied_files": copied_files,
+	}
+
+
+def write_tokenizer_runtime(tokenizer_dir: Path, runtime_manifest: dict[str, Any]) -> str:
+	runtime_path = tokenizer_dir / "tokenizer_runtime.json"
+	runtime_path.write_text(json.dumps(runtime_manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+	return runtime_path.name
 
 
 def export_weights(model_dir: Path, weights_dir: Path, export_dtype: str, torch_module: Any, safe_open_fn: Any) -> list[TensorExportRecord]:
@@ -244,6 +343,10 @@ def export_hf_checkpoint_for_cpp(
 
 	copied_tokenizer_files = copy_tokenizer_assets(model_dir, tokenizer_dir, auto_tokenizer_cls)
 	tokenizer_manifest = build_tokenizer_manifest(model_dir, copied_tokenizer_files, auto_tokenizer_cls)
+	tokenizer = auto_tokenizer_cls.from_pretrained(model_dir, trust_remote_code=True)
+	tokenizer_runtime = build_tokenizer_runtime_manifest(tokenizer, copied_tokenizer_files)
+	tokenizer_runtime_file = write_tokenizer_runtime(tokenizer_dir, tokenizer_runtime)
+	tokenizer_manifest["runtime_file"] = tokenizer_runtime_file
 	tensor_records = export_weights(model_dir, weights_dir, export_dtype, torch_module, safe_open_fn)
 
 	config = load_json_if_exists(model_dir / "config.json")
@@ -252,7 +355,7 @@ def export_hf_checkpoint_for_cpp(
 
 	manifest = {
 		"format": "soc.cpp.llm_export",
-		"format_version": 1,
+		"format_version": 2,
 		"model_id": model_id,
 		"source_dir": str(model_dir),
 		"export_dtype": export_dtype,
@@ -260,6 +363,7 @@ def export_hf_checkpoint_for_cpp(
 		"config": config,
 		"generation_config": generation_config,
 		"source_index": source_index,
+		"tokenizer_runtime_file": f"tokenizer/{tokenizer_runtime_file}",
 		"tensors": [asdict(record) for record in tensor_records],
 		"tokenizer": tokenizer_manifest,
 	}

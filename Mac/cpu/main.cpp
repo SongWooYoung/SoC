@@ -1,142 +1,97 @@
-#include <chrono>
+#include <cstdlib>
 #include <iostream>
-#include "header/custom_math.h"
-#include "header/matrix.h"
+#include <stdexcept>
+#include <string>
+
+#include "header/runtime_pipeline.h"
 
 namespace {
-template<typename T>
-void print_matrix_contents(const matrix<T>& value) {
-    for (int row = 0; row < value.row_count(); ++row) {
-        for (int col = 0; col < value.col_count(); ++col) {
-            std::cout << value[row][col] << ' ';
-        }
-        std::cout << '\n';
-    }
+struct CliOptions {
+    std::string manifest_path;
+    std::string prompt;
+    RuntimeGenerationOptions generation;
+};
+
+[[noreturn]] void PrintUsageAndExit(const char* executable, int exit_code) {
+    std::cerr
+        << "Usage: " << executable << " --manifest <manifest.json> --prompt <text> [options]\n"
+        << "Options:\n"
+        << "  --max-new-tokens <n>   Number of tokens to generate (default: 32)\n"
+        << "  --temperature <value>  Sampler temperature (default: 1.0)\n"
+        << "  --top-k <n>            Sampler top-k (default: 1)\n"
+        << "  --eos-token-id <id>    Stop when this token id is generated (default: disabled)\n"
+        << "  --max-seq-len <n>      KV cache capacity for generation (default: 256)\n";
+    std::exit(exit_code);
 }
 
-long long benchmark_transpose(int rows, int cols, int iterations) {
-    using clock = std::chrono::steady_clock;
+CliOptions ParseArgs(int argc, char** argv) {
+    CliOptions options;
 
-    matrix<int> sample(rows, cols);
-    for (int row = 0; row < rows; ++row) {
-        for (int col = 0; col < cols; ++col) {
-            sample[row][col] = row * cols + col;
-        }
-    }
+    for (int index = 1; index < argc; ++index) {
+        const std::string argument = argv[index];
+        auto require_value = [&](const char* name) -> std::string {
+            if (index + 1 >= argc) {
+                throw std::runtime_error(std::string("missing value for argument: ") + name);
+            }
+            ++index;
+            return argv[index];
+        };
 
-    long long checksum = 0;
-    auto start = clock::now();
-    for (int iteration = 0; iteration < iterations; ++iteration) {
-        matrix<int> working(sample);
-        working.transpose();
-        checksum += working[0][0];
-        checksum += working[cols - 1][rows - 1];
-    }
-    auto end = clock::now();
-
-    std::cout << "benchmark checksum: " << checksum << '\n';
-
-    return std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-}
-
-
-long long benchmark_multiply(int rows, int shared, int cols, int iterations) {
-    using clock = std::chrono::steady_clock;
-
-    matrix<int> left(rows, shared);
-    matrix<int> right(shared, cols);
-
-    for (int row = 0; row < rows; ++row) {
-        for (int col = 0; col < shared; ++col) {
-            left[row][col] = (row + col) % 17;
-        }
-    }
-
-    for (int row = 0; row < shared; ++row) {
-        for (int col = 0; col < cols; ++col) {
-            right[row][col] = (row * 3 + col) % 19;
+        if (argument == "--manifest") {
+            options.manifest_path = require_value("--manifest");
+        } else if (argument == "--prompt") {
+            options.prompt = require_value("--prompt");
+        } else if (argument == "--max-new-tokens") {
+            options.generation.max_new_tokens = static_cast<std::size_t>(std::stoull(require_value("--max-new-tokens")));
+        } else if (argument == "--temperature") {
+            options.generation.sampler.temperature = std::stof(require_value("--temperature"));
+        } else if (argument == "--top-k") {
+            options.generation.sampler.top_k = static_cast<std::size_t>(std::stoull(require_value("--top-k")));
+        } else if (argument == "--eos-token-id") {
+            options.generation.eos_token_id = std::stoi(require_value("--eos-token-id"));
+        } else if (argument == "--max-seq-len") {
+            options.generation.max_sequence_length = static_cast<std::size_t>(std::stoull(require_value("--max-seq-len")));
+        } else if (argument == "--help" || argument == "-h") {
+            PrintUsageAndExit(argv[0], 0);
+        } else {
+            throw std::runtime_error("unknown argument: " + argument);
         }
     }
 
-    long long checksum = 0;
-    auto start = clock::now();
-    for (int iteration = 0; iteration < iterations; ++iteration) {
-        matrix<int> product = MatMul(left, right);
-        checksum += product[0][0];
-        checksum += product[rows - 1][cols - 1];
+    if (options.manifest_path.empty()) {
+        throw std::runtime_error("--manifest is required");
     }
-    auto end = clock::now();
+    if (options.prompt.empty()) {
+        throw std::runtime_error("--prompt is required");
+    }
 
-    std::cout << "multiply checksum: " << checksum << '\n';
+    return options;
+}
 
-    return std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+void PrintTokenIds(const char* label, const std::vector<int>& token_ids) {
+    std::cout << label << ": [";
+    for (std::size_t index = 0; index < token_ids.size(); ++index) {
+        if (index != 0) {
+            std::cout << ", ";
+        }
+        std::cout << token_ids[index];
+    }
+    std::cout << "]\n";
 }
 }
 
-int main() {
-    matrix<int> m(3, 4);
-    std::cout << "initial m[2][3]: " << m[2][3] << '\n';
+int main(int argc, char** argv) {
+    try {
+        const CliOptions options = ParseArgs(argc, argv);
+        const GenerationResult result = RuntimePipeline::Generate(options.manifest_path, options.prompt, options.generation);
 
-    m = {
-        {1, 2, 3, 4},
-        {5, 6, 7, 8},
-        {9, 10, 11, 12}
-    };
-    std::cout << "after assignment m[2][3]: " << m[2][3] << '\n';
-
-    m[2][3] = 12;
-    std::cout << "after write m[2][3]: " << m[2][3] << '\n';
-
-    std::cout << "before transpose" << '\n';
-    print_matrix_contents(m);
-    m.transpose();
-    std::cout << "after transpose" << '\n';
-    print_matrix_contents(m);
-
-    matrix<int> left = {
-        {1, 2, 3},
-        {4, 5, 6}
-    };
-    matrix<int> right = {
-        {7, 8},
-        {9, 10},
-        {11, 12}
-    };
-    matrix<int> product = MatMul(left, right);
-
-    std::cout << "matrix multiply result" << '\n';
-    print_matrix_contents(product);
-
-    const int square_time = static_cast<int>(benchmark_transpose(512, 512, 40));
-    const int rectangular_time = static_cast<int>(benchmark_transpose(384, 768, 25));
-    const int multiply_time = static_cast<int>(benchmark_multiply(256, 256, 256, 20));
-
-    std::cout << "512x512 transpose total time: " << square_time << " us" << '\n';
-    std::cout << "384x768 transpose total time: " << rectangular_time << " us" << '\n';
-    std::cout << "256x256 multiply total time: " << multiply_time << " us" << '\n';
-
-    m.display();
-
-    // Test with double type
-    std::cout << "\n=== Testing with double type ===" << '\n';
-    matrix<double> dm = {
-        {1.5, 2.5, 3.5},
-        {4.5, 5.5, 6.5}
-    };
-    std::cout << "double matrix:" << '\n';
-    print_matrix_contents(dm);
-
-    matrix<double> dleft = {
-        {1.0, 2.0},
-        {3.0, 4.0}
-    };
-    matrix<double> dright = {
-        {5.0, 6.0},
-        {7.0, 8.0}
-    };
-    matrix<double> dproduct = MatMul(dleft, dright);
-    std::cout << "double matrix multiply result:" << '\n';
-    print_matrix_contents(dproduct);
-
-    return 0;
+        std::cout << "prompt: " << options.prompt << "\n";
+        PrintTokenIds("prompt_token_ids", result.prompt_token_ids);
+        PrintTokenIds("generated_token_ids", result.generated_token_ids);
+        std::cout << "generated_text: " << result.generated_text << "\n";
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "runtime error: " << error.what() << "\n";
+        PrintUsageAndExit(argv[0], 1);
+    }
 }
