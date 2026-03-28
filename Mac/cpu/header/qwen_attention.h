@@ -4,6 +4,7 @@
 #include "header/kv_cache.h"
 #include "header/grouped_query_attention.h"
 #include "header/linear.h"
+#include "header/rms_norm_module.h"
 #include "header/rope.h"
 
 class QwenAttention {
@@ -13,6 +14,8 @@ public:
         Linear k_proj,
         Linear v_proj,
         Linear o_proj,
+        RMSNormModule q_norm,
+        RMSNormModule k_norm,
         RoPE rope,
         GroupedQueryAttention attention);
 
@@ -28,6 +31,8 @@ private:
     Linear k_proj_;
     Linear v_proj_;
     Linear o_proj_;
+    RMSNormModule q_norm_;
+    RMSNormModule k_norm_;
     RoPE rope_;
     GroupedQueryAttention attention_;
 };

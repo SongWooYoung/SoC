@@ -337,6 +337,8 @@ void test_qwen_attention_module() {
         k_proj,
         v_proj,
         o_proj,
+        RMSNormModule(MakeFloatTensor({1.0f, 1.0f}, {2})),
+        RMSNormModule(MakeFloatTensor({1.0f, 1.0f}, {2})),
         RoPE(2, 10000.0),
         GroupedQueryAttention(2, 1, 2, true));
 
@@ -377,6 +379,8 @@ void test_qwen_attention_cached_module() {
             0.0f, 0.0f, 2.0f, 0.0f,
             0.0f, 0.0f, 0.0f, 2.0f,
         }, {4, 4})),
+        RMSNormModule(MakeFloatTensor({1.0f, 1.0f}, {2})),
+        RMSNormModule(MakeFloatTensor({1.0f, 1.0f}, {2})),
         RoPE(2, 10000.0),
         GroupedQueryAttention(2, 1, 2, true));
 
@@ -477,6 +481,8 @@ void test_qwen_block_module() {
         Linear(MakeFloatTensor(std::vector<float>(8, 0.0f), {2, 4})),
         Linear(MakeFloatTensor(std::vector<float>(8, 0.0f), {2, 4})),
         Linear(MakeFloatTensor(std::vector<float>(16, 0.0f), {4, 4})),
+        RMSNormModule(MakeFloatTensor({1.0f, 1.0f}, {2})),
+        RMSNormModule(MakeFloatTensor({1.0f, 1.0f}, {2})),
         RoPE(2, 10000.0),
         GroupedQueryAttention(2, 1, 2, true));
     const QwenMLP mlp(
@@ -550,6 +556,8 @@ void test_qwen_causal_lm_cached_module() {
             0.0f, 0.0f, 1.0f, 0.0f,
             0.0f, 0.0f, 0.0f, 1.0f,
         }, {4, 4})),
+        RMSNormModule(MakeFloatTensor({1.0f, 1.0f}, {2})),
+        RMSNormModule(MakeFloatTensor({1.0f, 1.0f}, {2})),
         RoPE(2, 10000.0),
         GroupedQueryAttention(2, 1, 2, true));
     const QwenMLP mlp(

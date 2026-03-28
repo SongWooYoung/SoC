@@ -49,7 +49,22 @@ GenerationResult GenerationSession::Generate(const std::string& prompt, std::siz
     result.prompt_token_ids = Prefill(prompt);
 
     std::vector<int> running_token_ids = result.prompt_token_ids;
-    for (std::size_t step = 0; step < max_new_tokens; ++step) {
+    std::size_t step = 0;
+    if (max_new_tokens != 0 && cache_.has_value()) {
+        const Tensor prompt_tensor = TokenIdsToTensor(result.prompt_token_ids);
+        const Tensor logits = model_.ForwardLogits(prompt_tensor, 0);
+        static_cast<void>(model_.ForwardLogitsCached(prompt_tensor, *cache_, 0));
+        const int token_id = sampler_.SampleFromLogits(logits, 0, result.prompt_token_ids.size() - 1);
+        result.generated_token_ids.push_back(token_id);
+        running_token_ids.push_back(token_id);
+        if (eos_token_id >= 0 && token_id == eos_token_id) {
+            result.generated_text = tokenizer_.Decode(result.generated_token_ids);
+            return result;
+        }
+        step = 1;
+    }
+
+    for (; step < max_new_tokens; ++step) {
         const int token_id = DecodeNextToken(running_token_ids);
         result.generated_token_ids.push_back(token_id);
         running_token_ids.push_back(token_id);

@@ -60,6 +60,8 @@ QwenCausalLM QwenModelLoader::LoadModel(const ManifestData& manifest) {
             Linear(RequireFloatingWeight(manifest, LayerTensorName(layer_index, "self_attn.k_proj.weight"), {kv_projection_size, hidden_size})),
             Linear(RequireFloatingWeight(manifest, LayerTensorName(layer_index, "self_attn.v_proj.weight"), {kv_projection_size, hidden_size})),
             Linear(RequireFloatingWeight(manifest, LayerTensorName(layer_index, "self_attn.o_proj.weight"), {hidden_size, q_projection_size})),
+            RMSNormModule(RequireFloatingWeight(manifest, LayerTensorName(layer_index, "self_attn.q_norm.weight"), {config.head_dim}), static_cast<float>(config.rms_norm_eps)),
+            RMSNormModule(RequireFloatingWeight(manifest, LayerTensorName(layer_index, "self_attn.k_norm.weight"), {config.head_dim}), static_cast<float>(config.rms_norm_eps)),
             RoPE(config.head_dim, config.rope_theta),
             GroupedQueryAttention(config.num_attention_heads, config.num_key_value_heads, config.head_dim, true));
 

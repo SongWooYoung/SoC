@@ -2,7 +2,9 @@
 
 이 저장소는 Qwen3 계열 모델을 외부 텐서 백엔드 없이 순수 C++ CPU runtime으로 실행하기 위한 실험용 workspace다.
 
-현재 기준으로 가장 정리된 경로는 `Mac/cpu`와 `LLM_interpreter` 조합이다.
+현재 기준으로 가장 정리된 경로는 `Mac/cpu`, `Mac/gpu`, `LLM_interpreter` 조합이다.
+
+GPU 경로는 이제 real export bundle 기준 CPU/GPU sequence parity regression과 성능 보고 경로까지 포함한다. Metal runtime 설계와 결과 문서는 [Mac/gpu/plan/README.md](/Users/song-ganghui/Documents/SoC/Mac/gpu/plan/README.md)에서 시작할 수 있다.
 
 ## Workspace Layout
 
@@ -14,6 +16,8 @@
    실제 `Qwen/Qwen3-0.6B` raw snapshot
 4. `models/cpp/qwen3-0.6b`
    C++ runtime이 읽는 실제 exported bundle
+5. `Mac/gpu`
+   Apple Metal 기반 GPU runtime, real-bundle regression, sweep automation, report artifacts
 
 ## Validated Path
 
@@ -127,9 +131,55 @@ cd /Users/song-ganghui/Documents/SoC/Mac/cpu
 make regression
 ```
 
+### 5. GPU regression and sweep
+
+Metal GPU 경로는 real bundle 기준으로 CPU first-token parity, multi-token sequence parity, `GenerationContext` parity, stage timing, Metal GPU timestamp 기반 GPU active ratio, temporary arena working-set ratio를 함께 기록한다.
+
+```bash
+cd /Users/song-ganghui/Documents/SoC
+make regression
+```
+
+GPU regression만 따로 실행:
+
+```bash
+cd /Users/song-ganghui/Documents/SoC/Mac/gpu
+make real-bundle-regression
+```
+
+prompt-length sweep summary 생성:
+
+```bash
+cd /Users/song-ganghui/Documents/SoC
+make gpu-sweep
+```
+
+기본 report artifact:
+
+1. `Mac/gpu/build/reports/test_real_bundle_regression_report.md`
+2. `Mac/gpu/build/reports/test_real_bundle_sweep_summary.md`
+3. `Mac/gpu/build/reports/sweep_cases/*.md`
+
+bootstrap binary만 확인하려면 기존 경로도 그대로 사용할 수 있다.
+
+```bash
+cd /Users/song-ganghui/Documents/SoC/Mac/gpu
+make regression
+./build/bin/gpu_bootstrap
+```
+
+offline Metal Toolchain이 설치된 환경이라면 metallib도 미리 만들 수 있다.
+
+```bash
+cd /Users/song-ganghui/Documents/SoC/Mac/gpu
+make build-shaders
+```
+
 ## Notes
 
 1. `Mac/cpu/Makefile`은 이제 `-MMD -MP` dependency tracking을 사용한다. 이전 `test_nn_modules` 종료 시 segfault는 stale incremental build 가능성이 가장 높았고, clean rebuild 기준으로는 재현되지 않았다.
 2. Python export tooling의 CLI 옵션과 파일 산출물은 [LLM_interpreter/README.md](/Users/song-ganghui/Documents/SoC/LLM_interpreter/README.md)에 정리되어 있다.
 3. 더 상세한 설계 문서는 [Mac/cpu/plan/README.md](/Users/song-ganghui/Documents/SoC/Mac/cpu/plan/README.md)부터 시작하면 된다.
 4. 현재 문서 기준의 golden 값은 실제 `Qwen/Qwen3-0.6B` export bundle에서 측정한 값이다.
+5. Metal GPU 경로 설계와 real-bundle 결과 문서는 [Mac/gpu/plan/README.md](/Users/song-ganghui/Documents/SoC/Mac/gpu/plan/README.md)에 정리되어 있다.
+6. `Mac/gpu`는 offline Metal Toolchain이 없어도 runtime shader source compile fallback으로 regression을 수행할 수 있고, offline toolchain이 있으면 `make build-shaders`로 metallib를 미리 만들 수 있다.

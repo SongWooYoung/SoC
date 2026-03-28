@@ -63,12 +63,16 @@ QwenAttention::QwenAttention(
     Linear k_proj,
     Linear v_proj,
     Linear o_proj,
+        RMSNormModule q_norm,
+        RMSNormModule k_norm,
     RoPE rope,
     GroupedQueryAttention attention)
     : q_proj_(std::move(q_proj)),
       k_proj_(std::move(k_proj)),
       v_proj_(std::move(v_proj)),
       o_proj_(std::move(o_proj)),
+            q_norm_(std::move(q_norm)),
+            k_norm_(std::move(k_norm)),
       rope_(std::move(rope)),
       attention_(std::move(attention)) {
     Require(q_proj_.output_dim() == attention_.num_query_heads() * attention_.head_dim(),
@@ -79,6 +83,8 @@ QwenAttention::QwenAttention(
             "v_proj output_dim must equal num_key_value_heads * head_dim");
     Require(o_proj_.input_dim() == attention_.num_query_heads() * attention_.head_dim(),
             "o_proj input_dim must equal num_query_heads * head_dim");
+        Require(q_norm_.weight().shape()[0] == attention_.head_dim(), "q_norm hidden size must match attention head_dim");
+        Require(k_norm_.weight().shape()[0] == attention_.head_dim(), "k_norm hidden size must match attention head_dim");
     Require(rope_.head_dim() == attention_.head_dim(), "rope head_dim must match attention head_dim");
 }
 
@@ -120,6 +126,8 @@ Tensor QwenAttention::Forward(const Tensor& hidden_states, std::size_t position_
         attention_.head_dim(),
     });
 
+    query = q_norm_.Forward(query);
+    key = k_norm_.Forward(key);
     query = rope_.Forward(query, position_offset);
     key = rope_.Forward(key, position_offset);
 
@@ -157,6 +165,8 @@ Tensor QwenAttention::ForwardCached(const Tensor& hidden_states, TensorKVCache& 
         attention_.head_dim(),
     });
 
+    query = q_norm_.Forward(query);
+    key = k_norm_.Forward(key);
     query = rope_.Forward(query, position_offset);
     key = rope_.Forward(key, position_offset);
 
