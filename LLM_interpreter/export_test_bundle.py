@@ -70,6 +70,17 @@ class FakeBackendTokenizer:
 	def save(self, path: str) -> None:
 		Path(path).write_text("{\"version\":\"fake\"}", encoding="utf-8")
 
+	def to_str(self) -> str:
+		return json.dumps(
+			{
+				"pre_tokenizer": {
+					"type": "ByteLevel",
+					"add_prefix_space": False,
+					"use_regex": True,
+				},
+			}
+		)
+
 
 class FakeAddedToken:
 	def __init__(self, content: str):

@@ -16,6 +16,56 @@ void require(bool condition, const char* message) {
     }
 }
 
+std::vector<std::string> BuildByteToUnicodeMap() {
+    std::vector<int> byte_values;
+    for (int value = static_cast<int>('!'); value <= static_cast<int>('~'); ++value) {
+        byte_values.push_back(value);
+    }
+    for (int value = 161; value <= 172; ++value) {
+        byte_values.push_back(value);
+    }
+    for (int value = 174; value <= 255; ++value) {
+        byte_values.push_back(value);
+    }
+
+    std::vector<int> code_points = byte_values;
+    int additional = 0;
+    for (int byte_value = 0; byte_value < 256; ++byte_value) {
+        bool present = false;
+        for (int existing : byte_values) {
+            if (existing == byte_value) {
+                present = true;
+                break;
+            }
+        }
+        if (present) {
+            continue;
+        }
+        byte_values.push_back(byte_value);
+        code_points.push_back(256 + additional);
+        ++additional;
+    }
+
+    std::vector<std::string> mapping(256);
+    for (std::size_t index = 0; index < byte_values.size(); ++index) {
+        const int code_point = code_points[index];
+        std::string utf8;
+        if (code_point <= 0x7F) {
+            utf8.push_back(static_cast<char>(code_point));
+        } else if (code_point <= 0x7FF) {
+            utf8.push_back(static_cast<char>(0xC0 | ((code_point >> 6) & 0x1F)));
+            utf8.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+        } else {
+            utf8.push_back(static_cast<char>(0xE0 | ((code_point >> 12) & 0x0F)));
+            utf8.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+            utf8.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+        }
+        mapping[byte_values[index]] = utf8;
+    }
+
+    return mapping;
+}
+
 ManifestData BuildManifest() {
     ManifestData manifest;
     manifest.format = "soc.cpp.llm_export";
@@ -136,12 +186,110 @@ void test_tokenizer_runtime_minimal_encode_decode() {
     }
     require(threw_for_unknown, "tokenizer runtime must reject unsupported text in minimal mode");
 }
+
+void test_tokenizer_runtime_bpe_fallback() {
+    std::cout << "=== Testing Tokenizer Runtime BPE Fallback ===" << std::endl;
+    TokenizerRuntimeData runtime = BuildTokenizerRuntimeData();
+    runtime.added_tokens.clear();
+    runtime.vocab = {
+        {0, "h"},
+        {1, "e"},
+        {2, "l"},
+        {3, "o"},
+        {4, " "},
+        {5, "w"},
+        {6, "r"},
+        {7, "d"},
+        {8, "he"},
+        {9, "ll"},
+        {10, "hell"},
+        {11, "hello"},
+        {12, " world"},
+    };
+    runtime.vocab_size = 13;
+    runtime.bpe_model.enabled = true;
+    runtime.bpe_model.type = "bpe";
+    runtime.bpe_model.merges = {
+        {"h", "e"},
+        {"l", "l"},
+        {"he", "ll"},
+        {"hell", "o"},
+        {" ", "w"},
+        {" w", "o"},
+        {" wo", "r"},
+        {" wor", "l"},
+        {" worl", "d"},
+    };
+
+    const TokenizerRuntime tokenizer(runtime);
+    const std::vector<int> encoded = tokenizer.Encode("hello world");
+    require(encoded.size() == 2, "tokenizer runtime bpe fallback must merge prompt into expected tokens");
+    require(encoded[0] == 11 && encoded[1] == 12, "tokenizer runtime bpe fallback must emit merged token ids");
+    require(tokenizer.Decode(encoded) == "hello world", "tokenizer runtime bpe fallback decode must reconstruct text");
+}
+
+void test_tokenizer_runtime_byte_level_prefix_space() {
+    std::cout << "=== Testing Tokenizer Runtime Byte-Level Prefix Space ===" << std::endl;
+    TokenizerRuntimeData runtime = BuildTokenizerRuntimeData();
+    runtime.added_tokens.clear();
+    runtime.vocab = {
+        {0, "Ġh"},
+        {1, "e"},
+        {2, "l"},
+        {3, "o"},
+        {4, "Ġw"},
+        {5, "r"},
+        {6, "d"},
+        {7, "Ġhe"},
+        {8, "ll"},
+        {9, "Ġhell"},
+        {10, "Ġhello"},
+        {11, "Ġwo"},
+        {12, "Ġwor"},
+        {13, "Ġworl"},
+        {14, "Ġworld"},
+    };
+    runtime.vocab_size = 15;
+    runtime.bpe_model.enabled = true;
+    runtime.bpe_model.type = "bpe";
+    runtime.bpe_model.merges = {
+        {"Ġ", "h"},
+        {"Ġh", "e"},
+        {"l", "l"},
+        {"Ġhe", "ll"},
+        {"Ġhell", "o"},
+        {"Ġ", "w"},
+        {"Ġw", "o"},
+        {"Ġwo", "r"},
+        {"Ġwor", "l"},
+        {"Ġworl", "d"},
+    };
+    runtime.pre_tokenizer.enabled = true;
+    runtime.pre_tokenizer.type = "ByteLevel";
+    runtime.pre_tokenizer.byte_level.enabled = true;
+    runtime.pre_tokenizer.byte_level.add_prefix_space = true;
+    runtime.pre_tokenizer.byte_level.use_regex = true;
+        runtime.decoder.enabled = true;
+        runtime.decoder.type = "ByteLevel";
+        runtime.decoder.byte_level.enabled = true;
+        runtime.decoder.byte_level.byte_to_unicode = BuildByteToUnicodeMap();
+
+    const TokenizerRuntime tokenizer(runtime);
+    const std::vector<int> encoded = tokenizer.Encode("hello world");
+    require(encoded.size() == 2, "byte-level pre-tokenizer must keep word boundaries before BPE");
+    require(encoded[0] == 10 && encoded[1] == 14,
+            "byte-level pre-tokenizer must add prefix space to the first piece");
+    require(tokenizer.Decode(encoded) == " hello world",
+            "decoded byte-level tokens must reflect stored leading-space token content");
+}
 }
 
 int main() {
     test_qwen3_config_parse_and_validate();
     test_startup_validator();
     test_tokenizer_runtime_minimal_encode_decode();
+    test_tokenizer_runtime_bpe_fallback();
+    test_tokenizer_runtime_byte_level_prefix_space();
 
     std::cout << "=== Model Bootstrap Tests Completed ===" << std::endl;
     return 0;

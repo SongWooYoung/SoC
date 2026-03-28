@@ -55,6 +55,52 @@ struct VocabEntry {
     std::string token;
 };
 
+struct BPEMergeRecord {
+    std::string left;
+    std::string right;
+};
+
+struct BPETokenizerModelData {
+    bool enabled = false;
+    std::string type;
+    std::string unk_token;
+    std::string continuing_subword_prefix;
+    std::string end_of_word_suffix;
+    std::vector<BPEMergeRecord> merges;
+};
+
+struct ByteLevelPreTokenizerData {
+    bool enabled = false;
+    bool add_prefix_space = false;
+    bool use_regex = true;
+};
+
+struct PreTokenizerRuntimeData {
+    bool enabled = false;
+    std::string type;
+    ByteLevelPreTokenizerData byte_level;
+};
+
+struct ByteLevelDecoderData {
+    bool enabled = false;
+    bool add_prefix_space = false;
+    bool trim_offsets = false;
+    bool use_regex = true;
+    std::vector<std::string> byte_to_unicode;
+};
+
+struct BPEDecoderData {
+    bool enabled = false;
+    std::string suffix;
+};
+
+struct DecoderRuntimeData {
+    bool enabled = false;
+    std::string type;
+    ByteLevelDecoderData byte_level;
+    BPEDecoderData bpe;
+};
+
 struct TokenizerRuntimeData {
     std::string format;
     int format_version;
@@ -65,6 +111,9 @@ struct TokenizerRuntimeData {
     TemplateRuntimeData template_runtime;
     std::vector<AddedTokenRecord> added_tokens;
     std::vector<VocabEntry> vocab;
+    BPETokenizerModelData bpe_model;
+    PreTokenizerRuntimeData pre_tokenizer;
+    DecoderRuntimeData decoder;
     JsonValue special_tokens_map;
     JsonValue special_token_ids;
 };

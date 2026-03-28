@@ -1,5 +1,9 @@
 # SoC Pure C++ LLM Plan
 
+빠른 실행 경로와 현재 검증된 명령은 workspace 루트의 [README.md](/Users/song-ganghui/Documents/SoC/README.md)에서 먼저 보는 편이 낫다. 이 문서는 그 위에 있는 설계 계획과 구현 방향을 다룬다.
+
+현재 `Mac/cpu`의 테스트 소스는 `Mac/cpu/test` 아래에 모여 있고, Makefile이 만드는 실행 파일은 `Mac/cpu/build/bin` 아래에 배치된다.
+
 ## Mission
 
 이 프로젝트의 최종 목적은 다음 두 가지를 동시에 만족하는 것이다.
@@ -93,3 +97,23 @@ Phase 1의 성공 기준은 다음이다.
 5. output projection, GQA, RMSNorm, RoPE가 config 기반으로 맞게 적용된다.
 6. thinking / non-thinking template 선택이 C++ runtime에서 재현된다.
 7. tied embedding/lm head 계약이 export/runtime 양쪽에서 일관된다.
+
+## Current Verified Status
+
+현재 `Mac/cpu`와 `LLM_interpreter` 기준으로 다음 항목은 실제 export bundle과 테스트로 검증된 상태다.
+
+1. 실제 `Qwen/Qwen3-0.6B` snapshot을 `models/raw/qwen3-0.6b`로 내려받아 `models/cpp/qwen3-0.6b/manifest.json`으로 export할 수 있다.
+2. runtime tokenizer는 ByteLevel BPE의 byte-to-unicode 매핑, `continuing_subword_prefix`, decoder metadata를 읽고 encode/decode에 반영한다.
+3. raw prompt `Hello, world!`에 대해 runtime prompt token ids가 Hugging Face fast tokenizer와 동일하게 `[9707, 11, 1879, 0]`로 검증되었다.
+4. real-bundle golden integration target이 두 경로로 고정되었다.
+   raw prompt 경로: `make integration-qwen3-golden`
+   chat template 경로: `make integration-qwen3-chat-golden`
+5. `test_nn_modules`의 종료 시 segfault는 stale incremental build 가능성이 가장 높았고, Makefile에 header dependency tracking(`-MMD -MP`)을 추가한 clean rebuild 기준으로 full regression이 다시 통과했다.
+
+이 상태는 phase 1 성공 기준 중 다음을 이미 직접 충족한다.
+
+1. export bundle load
+2. prompt tokenize
+3. prefill + decode smoke
+4. thinking/non-thinking template 재현
+5. export/runtime contract alignment

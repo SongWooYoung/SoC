@@ -23,9 +23,21 @@ struct RuntimeBundle {
     QwenCausalLM model;
 };
 
+struct RuntimePromptOptions {
+    bool apply_chat_template = false;
+    bool add_generation_prompt = true;
+    bool enable_thinking = true;
+    std::string system_prompt;
+};
+
 class RuntimePipeline {
 public:
     static RuntimeBundle LoadBundle(const std::string& manifest_path);
+    static RuntimeGenerationOptions GenerationOptionsFromManifest(const ManifestData& manifest);
+    static std::string PreparePrompt(
+        const TokenizerRuntimeData& tokenizer_runtime,
+        const std::string& prompt,
+        const RuntimePromptOptions& options = {});
     static GenerationSession CreateSession(const RuntimeBundle& bundle, const RuntimeGenerationOptions& options = {});
     static GenerationResult Generate(const std::string& manifest_path, const std::string& prompt, const RuntimeGenerationOptions& options = {});
 };

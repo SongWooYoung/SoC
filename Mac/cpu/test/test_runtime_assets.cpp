@@ -5,6 +5,7 @@
 #include <string>
 
 #include "header/json_parser.h"
+#include "header/runtime_pipeline.h"
 #include "header/runtime_assets.h"
 
 namespace {
@@ -98,6 +99,38 @@ void test_tokenizer_runtime_loader() {
         "    {\"id\": 0, \"token\": \"!\"},\n"
         "    {\"id\": 1, \"token\": \"\\\"\"}\n"
         "  ],\n"
+        "  \"bpe_model\": {\n"
+        "    \"type\": \"bpe\",\n"
+        "    \"unk_token\": null,\n"
+        "    \"continuing_subword_prefix\": \"\",\n"
+        "    \"end_of_word_suffix\": \"\",\n"
+        "    \"merges\": [\n"
+        "      {\"left\": \"h\", \"right\": \"e\"},\n"
+        "      {\"left\": \"he\", \"right\": \"llo\"}\n"
+        "    ]\n"
+        "  },\n"
+        "  \"pre_tokenizer\": {\n"
+        "    \"type\": \"ByteLevel\",\n"
+        "    \"byte_level\": {\n"
+        "      \"enabled\": true,\n"
+        "      \"add_prefix_space\": true,\n"
+        "      \"use_regex\": true\n"
+        "    }\n"
+        "  },\n"
+        "  \"decoder\": {\n"
+        "    \"type\": \"Sequence\",\n"
+        "    \"byte_level\": {\n"
+        "      \"enabled\": true,\n"
+        "      \"add_prefix_space\": false,\n"
+        "      \"trim_offsets\": false,\n"
+        "      \"use_regex\": true,\n"
+        "      \"byte_to_unicode\": [\"!\", \"\\\"\"]\n"
+        "    },\n"
+        "    \"bpe\": {\n"
+        "      \"enabled\": true,\n"
+        "      \"suffix\": \"</w>\"\n"
+        "    }\n"
+        "  },\n"
         "  \"chat_template\": \"dummy-template\",\n"
         "  \"template_runtime\": {\n"
         "    \"type\": \"qwen3\",\n"
@@ -117,6 +150,15 @@ void test_tokenizer_runtime_loader() {
     require(runtime.template_runtime.im_start == "<|im_start|>", "tokenizer runtime loader must read template runtime");
     require(runtime.added_tokens.size() == 1, "tokenizer runtime loader must read added tokens");
     require(runtime.vocab.size() == 2, "tokenizer runtime loader must read vocab entries");
+    require(runtime.bpe_model.enabled, "tokenizer runtime loader must read optional bpe model");
+    require(runtime.bpe_model.merges.size() == 2, "tokenizer runtime loader must read bpe merges");
+    require(runtime.pre_tokenizer.enabled, "tokenizer runtime loader must read pre_tokenizer metadata");
+    require(runtime.pre_tokenizer.byte_level.add_prefix_space,
+            "tokenizer runtime loader must read byte-level add_prefix_space");
+        require(runtime.decoder.enabled, "tokenizer runtime loader must read decoder metadata");
+        require(runtime.decoder.bpe.suffix == "</w>", "tokenizer runtime loader must read bpe decoder suffix");
+        require(runtime.decoder.byte_level.byte_to_unicode.size() == 2,
+            "tokenizer runtime loader must read byte-to-unicode mappings");
 
     std::filesystem::remove_all(temp_dir);
 }
@@ -153,6 +195,49 @@ void test_qwen3_template_builder() {
     require(no_think_prompt.find("<think>") == std::string::npos,
             "template builder must omit think tag when thinking is disabled");
 }
+
+void test_runtime_pipeline_helpers() {
+    std::cout << "=== Testing Runtime Pipeline Helpers ===" << std::endl;
+
+    ManifestData manifest;
+    manifest.generation_config = JsonParser::Parse(
+        "{"
+        "\"max_new_tokens\":12,"
+        "\"temperature\":0.7,"
+        "\"top_k\":4,"
+        "\"eos_token_id\":[151645],"
+        "\"max_length\":1024"
+        "}"
+    );
+
+    const RuntimeGenerationOptions options = RuntimePipeline::GenerationOptionsFromManifest(manifest);
+    require(options.max_new_tokens == 12, "runtime pipeline must load max_new_tokens from generation_config");
+    require(options.sampler.top_k == 4, "runtime pipeline must load top_k from generation_config");
+    require(options.eos_token_id == 151645, "runtime pipeline must accept eos_token_id arrays from generation_config");
+    require(options.max_sequence_length == 1024, "runtime pipeline must map max_length to sequence length");
+
+    TokenizerRuntimeData tokenizer_runtime;
+    tokenizer_runtime.template_runtime = TemplateRuntimeData{
+        "qwen3",
+        "<|im_start|>",
+        "<|im_end|>",
+        "<think>",
+        "</think>",
+        "You are a helpful assistant.",
+    };
+
+    RuntimePromptOptions prompt_options;
+    prompt_options.apply_chat_template = true;
+    prompt_options.enable_thinking = false;
+    prompt_options.system_prompt = "System override.";
+    const std::string prepared_prompt = RuntimePipeline::PreparePrompt(tokenizer_runtime, "Hello", prompt_options);
+    require(prepared_prompt.find("System override.") != std::string::npos,
+            "runtime pipeline must pass through system prompt overrides");
+    require(prepared_prompt.find("<|im_start|>user\nHello<|im_end|>") != std::string::npos,
+            "runtime pipeline must wrap prompt as a user chat turn");
+    require(prepared_prompt.find("<think>") == std::string::npos,
+            "runtime pipeline must omit thinking tag when disabled");
+}
 }
 
 int main() {
@@ -160,6 +245,7 @@ int main() {
     test_manifest_loader();
     test_tokenizer_runtime_loader();
     test_qwen3_template_builder();
+    test_runtime_pipeline_helpers();
 
     std::cout << "=== Runtime Asset Tests Completed ===" << std::endl;
     return 0;

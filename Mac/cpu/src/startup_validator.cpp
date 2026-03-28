@@ -50,14 +50,53 @@ void StartupValidator::ValidateTokenizerRuntime(const TokenizerRuntimeData& toke
     if (FindTokenIdByContent(tokenizer_runtime, tokenizer_runtime.template_runtime.think_end) < 0) {
         throw std::runtime_error("tokenizer runtime is missing think_end token id");
     }
+    if (tokenizer_runtime.bpe_model.enabled) {
+        if (tokenizer_runtime.bpe_model.type != "bpe") {
+            throw std::runtime_error("tokenizer bpe_model type must be bpe");
+        }
+        if (tokenizer_runtime.bpe_model.merges.empty()) {
+            throw std::runtime_error("tokenizer bpe_model must define merges");
+        }
+        if (!tokenizer_runtime.bpe_model.unk_token.empty() &&
+            !ContainsTokenContent(tokenizer_runtime, tokenizer_runtime.bpe_model.unk_token)) {
+            throw std::runtime_error("tokenizer bpe_model unk_token must exist in tokenizer vocab");
+        }
+    }
+    if (tokenizer_runtime.pre_tokenizer.enabled && tokenizer_runtime.pre_tokenizer.byte_level.enabled) {
+        if (tokenizer_runtime.pre_tokenizer.type.empty()) {
+            throw std::runtime_error("tokenizer pre_tokenizer must define a type when enabled");
+        }
+    }
+    if (tokenizer_runtime.decoder.enabled && tokenizer_runtime.decoder.byte_level.enabled &&
+        !tokenizer_runtime.decoder.byte_level.byte_to_unicode.empty() &&
+        tokenizer_runtime.decoder.byte_level.byte_to_unicode.size() != 256) {
+        throw std::runtime_error("tokenizer decoder byte_to_unicode mapping must contain 256 entries when provided");
+    }
 }
 
 void StartupValidator::ValidateManifestAndTokenizer(const ManifestData& manifest, const TokenizerRuntimeData& tokenizer_runtime) {
     const Qwen3Config config = ValidateManifest(manifest);
     ValidateTokenizerRuntime(tokenizer_runtime);
 
-    if (static_cast<std::size_t>(tokenizer_runtime.vocab_size) != config.vocab_size) {
-        throw std::runtime_error("tokenizer vocab_size must match qwen3 config vocab_size");
+    if (tokenizer_runtime.vocab_size <= 0) {
+        throw std::runtime_error("tokenizer vocab_size must be positive");
+    }
+    if (static_cast<std::size_t>(tokenizer_runtime.vocab_size) > config.vocab_size) {
+        throw std::runtime_error("tokenizer vocab_size must not exceed qwen3 config vocab_size");
+    }
+    int max_token_id = -1;
+    for (const AddedTokenRecord& token : tokenizer_runtime.added_tokens) {
+        if (token.id > max_token_id) {
+            max_token_id = token.id;
+        }
+    }
+    for (const VocabEntry& token : tokenizer_runtime.vocab) {
+        if (token.id > max_token_id) {
+            max_token_id = token.id;
+        }
+    }
+    if (max_token_id < 0 || static_cast<std::size_t>(max_token_id) >= config.vocab_size) {
+        throw std::runtime_error("tokenizer token ids must fit within qwen3 config vocab_size");
     }
 }
 
@@ -73,4 +112,8 @@ int StartupValidator::FindTokenIdByContent(const TokenizerRuntimeData& tokenizer
         }
     }
     return -1;
+}
+
+bool StartupValidator::ContainsTokenContent(const TokenizerRuntimeData& tokenizer_runtime, const std::string& token_content) {
+    return FindTokenIdByContent(tokenizer_runtime, token_content) >= 0;
 }

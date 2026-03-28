@@ -38,6 +38,88 @@ TemplateRuntimeData ParseTemplateRuntime(const JsonValue& value) {
     };
 }
 
+BPETokenizerModelData ParseBPETokenizerModel(const JsonValue& value) {
+    BPETokenizerModelData model;
+    model.enabled = true;
+    model.type = RequireString(value, "type");
+    model.unk_token = value.contains("unk_token") && !value.at("unk_token").is_null()
+        ? value.at("unk_token").as_string()
+        : "";
+    model.continuing_subword_prefix = value.contains("continuing_subword_prefix") && !value.at("continuing_subword_prefix").is_null()
+        ? value.at("continuing_subword_prefix").as_string()
+        : "";
+    model.end_of_word_suffix = value.contains("end_of_word_suffix") && !value.at("end_of_word_suffix").is_null()
+        ? value.at("end_of_word_suffix").as_string()
+        : "";
+
+    for (const JsonValue& merge_value : value.at("merges").as_array()) {
+        model.merges.push_back(BPEMergeRecord{
+            RequireString(merge_value, "left"),
+            RequireString(merge_value, "right"),
+        });
+    }
+
+    return model;
+}
+
+PreTokenizerRuntimeData ParsePreTokenizerRuntime(const JsonValue& value) {
+    PreTokenizerRuntimeData pre_tokenizer;
+    pre_tokenizer.enabled = true;
+    pre_tokenizer.type = value.contains("type") && !value.at("type").is_null()
+        ? value.at("type").as_string()
+        : "";
+
+    if (value.contains("byte_level") && !value.at("byte_level").is_null()) {
+        const JsonValue& byte_level = value.at("byte_level");
+        pre_tokenizer.byte_level.enabled = byte_level.contains("enabled") ? byte_level.at("enabled").as_bool() : true;
+        pre_tokenizer.byte_level.add_prefix_space = byte_level.contains("add_prefix_space")
+            ? byte_level.at("add_prefix_space").as_bool()
+            : false;
+        pre_tokenizer.byte_level.use_regex = byte_level.contains("use_regex")
+            ? byte_level.at("use_regex").as_bool()
+            : true;
+    }
+
+    return pre_tokenizer;
+}
+
+DecoderRuntimeData ParseDecoderRuntime(const JsonValue& value) {
+    DecoderRuntimeData decoder;
+    decoder.enabled = true;
+    decoder.type = value.contains("type") && !value.at("type").is_null()
+        ? value.at("type").as_string()
+        : "";
+
+    if (value.contains("byte_level") && !value.at("byte_level").is_null()) {
+        const JsonValue& byte_level = value.at("byte_level");
+        decoder.byte_level.enabled = byte_level.contains("enabled") ? byte_level.at("enabled").as_bool() : true;
+        decoder.byte_level.add_prefix_space = byte_level.contains("add_prefix_space")
+            ? byte_level.at("add_prefix_space").as_bool()
+            : false;
+        decoder.byte_level.trim_offsets = byte_level.contains("trim_offsets")
+            ? byte_level.at("trim_offsets").as_bool()
+            : false;
+        decoder.byte_level.use_regex = byte_level.contains("use_regex")
+            ? byte_level.at("use_regex").as_bool()
+            : true;
+        if (byte_level.contains("byte_to_unicode") && !byte_level.at("byte_to_unicode").is_null()) {
+            for (const JsonValue& mapping : byte_level.at("byte_to_unicode").as_array()) {
+                decoder.byte_level.byte_to_unicode.push_back(mapping.as_string());
+            }
+        }
+    }
+
+    if (value.contains("bpe") && !value.at("bpe").is_null()) {
+        const JsonValue& bpe = value.at("bpe");
+        decoder.bpe.enabled = bpe.contains("enabled") ? bpe.at("enabled").as_bool() : true;
+        decoder.bpe.suffix = bpe.contains("suffix") && !bpe.at("suffix").is_null()
+            ? bpe.at("suffix").as_string()
+            : "";
+    }
+
+    return decoder;
+}
+
 std::string ResolveRelativePath(const std::filesystem::path& base_dir, const std::string& relative_path) {
     return (base_dir / relative_path).lexically_normal().string();
 }
@@ -119,6 +201,16 @@ TokenizerRuntimeData TokenizerRuntimeLoader::LoadFromFile(const std::string& run
             RequireString(vocab_value, "token"),
         });
     }
+
+    tokenizer_runtime.bpe_model = root.contains("bpe_model") && !root.at("bpe_model").is_null()
+        ? ParseBPETokenizerModel(root.at("bpe_model"))
+        : BPETokenizerModelData{};
+    tokenizer_runtime.pre_tokenizer = root.contains("pre_tokenizer") && !root.at("pre_tokenizer").is_null()
+        ? ParsePreTokenizerRuntime(root.at("pre_tokenizer"))
+        : PreTokenizerRuntimeData{};
+    tokenizer_runtime.decoder = root.contains("decoder") && !root.at("decoder").is_null()
+        ? ParseDecoderRuntime(root.at("decoder"))
+        : DecoderRuntimeData{};
 
     return tokenizer_runtime;
 }

@@ -14,6 +14,7 @@ public:
 
 private:
     static int FindTokenIdByContent(const TokenizerRuntimeData& tokenizer_runtime, const std::string& token_content);
+    static bool ContainsTokenContent(const TokenizerRuntimeData& tokenizer_runtime, const std::string& token_content);
 };
 
 #endif

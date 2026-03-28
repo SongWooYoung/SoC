@@ -4,11 +4,23 @@
 build/
 **/build/
 
+bin/
+**/bin/
+
 *.o
 *.a
 *.out
+*.pyc
+*.pyo
+
+__pycache__/
+**/__pycache__/
+
+*.dSYM/
 
 main
 **/main
+
+models/
 
 /.venv
