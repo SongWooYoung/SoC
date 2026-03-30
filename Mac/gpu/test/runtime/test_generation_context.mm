@@ -1,3 +1,4 @@
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -107,6 +108,35 @@ int main() {
     }
 
     soc::gpu::PipelineCache pipeline_cache(*context);
+    const std::vector<float> sampler_input = {
+        0.1f, 3.5f, 2.0f, 1.0f,
+    };
+    const soc::gpu::DeviceTensor sampler_logits = MakeFloatTensor(*context,
+                                                                  {1, 4},
+                                                                  sampler_input,
+                                                                  "sampler_logits",
+                                                                  &error_message);
+    soc::gpu::Sampler sampler({1.0f, 3});
+    int sampled_token_id = -1;
+    std::vector<float> sampled_top_logits;
+    std::vector<int> sampled_top_ids;
+    if (!sampler.SampleFromLogits(*context,
+                                  &pipeline_cache,
+                                  sampler_logits,
+                                  0,
+                                  &sampled_token_id,
+                                  &sampled_top_logits,
+                                  &sampled_top_ids,
+                                  temporary_arena.get(),
+                                  &error_message)) {
+        std::cerr << "sampler reduction failed: " << error_message << '\n';
+        return 1;
+    }
+    if (sampled_token_id != 1 || sampled_top_ids != std::vector<int>({1, 2, 3}) || sampled_top_logits.size() != 3 || std::fabs(sampled_top_logits[0] - 3.5f) > 1.0e-5f) {
+        std::cerr << "unexpected sampler top-k reduction result\n";
+        return 1;
+    }
+
     soc::gpu::GenerationContext generation_context(std::move(model),
                                                    soc::gpu::Sampler({1.0f, 2}),
                                                    soc::gpu::CommandScheduler(),

@@ -315,11 +315,14 @@ bool CompareCpuAndGpuFirstToken(const RuntimeBundle& cpu_bundle,
     }
 
     std::vector<float> gpu_top_logits;
-    if (!gpu_sampler.SampleFromLogits(logits_tensor,
+    if (!gpu_sampler.SampleFromLogits(context,
+                                      pipeline_cache,
+                                      logits_tensor,
                                       prompt_token_ids.size() - 1,
                                       gpu_token_id,
                                       &gpu_top_logits,
                                       gpu_top_token_ids,
+                                      temporary_arena,
                                       error_message)) {
         return false;
     }
@@ -419,11 +422,14 @@ bool RunGpuManualGeneration(const TokenizerRuntime& tokenizer,
         return false;
     }
     const soc::gpu::MetalProfilingSnapshot prefill_profile = context.GetProfilingSnapshot();
-    if (!sampler.SampleFromLogits(prefill_logits,
+    if (!sampler.SampleFromLogits(context,
+                                  pipeline_cache,
+                                  prefill_logits,
                                   prompt_token_ids.size() - 1,
                                   &run->first_token_id,
                                   &run->first_top_logits,
                                   &run->first_top_token_ids,
+                                  temporary_arena,
                                   error_message)) {
         return false;
     }
@@ -468,11 +474,14 @@ bool RunGpuManualGeneration(const TokenizerRuntime& tokenizer,
             int next_token_id = -1;
             std::vector<float> top_logits;
             std::vector<int> top_token_ids;
-            if (!sampler.SampleFromLogits(decode_logits,
+            if (!sampler.SampleFromLogits(context,
+                                          pipeline_cache,
+                                          decode_logits,
                                           0,
                                           &next_token_id,
                                           &top_logits,
                                           &top_token_ids,
+                                          temporary_arena,
                                           error_message)) {
                 return false;
             }

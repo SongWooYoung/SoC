@@ -26,6 +26,172 @@ bool AllocateTemporaryTensor(BufferArena* arena,
     return true;
 }
 
+bool CopyTensorViaHost(const DeviceTensor& input,
+                      const DeviceTensor& output,
+                      std::string* error_message) {
+    if (input.GetDesc().ByteSize() != output.GetDesc().ByteSize()) {
+        if (error_message != nullptr) {
+            *error_message = "QwenCausalLM copy requires matching tensor byte sizes";
+        }
+        return false;
+    }
+    std::vector<std::byte> bytes(input.GetDesc().ByteSize());
+    if (!input.GetBuffer()->Read(bytes.data(), bytes.size(), input.GetByteOffset(), error_message)) {
+        return false;
+    }
+    return output.GetBuffer()->Write(bytes.data(), bytes.size(), output.GetByteOffset(), error_message);
+}
+
+bool ValidateLayerRange(std::size_t start_layer,
+                        std::size_t end_layer,
+                        std::size_t total_layers,
+                        std::string* error_message) {
+    if (start_layer > end_layer || end_layer > total_layers) {
+        if (error_message != nullptr) {
+            *error_message = "invalid qwen layer range";
+        }
+        return false;
+    }
+    return true;
+}
+
+bool RunBlockRange(const MetalContext& context,
+                   PipelineCache* pipeline_cache,
+                   const QwenCausalLMWeights& weights,
+                   const QwenCausalLMParams& params,
+                   const DeviceTensor& input_hidden,
+                   KVCache* kv_cache,
+                   const DeviceTensor& output,
+                   BufferArena* temporary_arena,
+                   std::size_t position_offset,
+                   std::size_t start_layer,
+                   std::size_t end_layer,
+                   bool apply_final_norm,
+                   std::string* error_message) {
+    if (!ValidateLayerRange(start_layer, end_layer, weights.blocks.size(), error_message)) {
+        return false;
+    }
+    if (!input_hidden.IsValid() || !output.IsValid()) {
+        if (error_message != nullptr) {
+            *error_message = "QwenCausalLM block range expects valid tensors";
+        }
+        return false;
+    }
+    if (input_hidden.GetDesc().GetDataType() != DataType::kFloat32 || input_hidden.GetDesc().Rank() != 2 ||
+        output.GetDesc().GetDataType() != DataType::kFloat32 || output.GetDesc().Rank() != 2 ||
+        input_hidden.GetDesc().GetShape() != output.GetDesc().GetShape()) {
+        if (error_message != nullptr) {
+            *error_message = "QwenCausalLM block range expects matching rank-2 float32 hidden tensors";
+        }
+        return false;
+    }
+
+    const std::size_t token_count = input_hidden.GetDesc().GetShape()[0];
+    if (start_layer == end_layer) {
+        if (apply_final_norm) {
+            RmsNormParams final_norm_params;
+            final_norm_params.epsilon = params.rms_norm_eps;
+            final_norm_params.row_count = static_cast<std::uint32_t>(token_count);
+            final_norm_params.row_size = static_cast<std::uint32_t>(params.hidden_size);
+            return RmsNormOp::Run(context,
+                                  pipeline_cache,
+                                  input_hidden,
+                                  weights.final_norm_weight,
+                                  output,
+                                  final_norm_params,
+                                  temporary_arena,
+                                  error_message);
+        }
+        return CopyTensorViaHost(input_hidden, output, error_message);
+    }
+
+    BufferArenaMarkGuard arena_mark(temporary_arena, kv_cache == nullptr ? "QwenCausalLMHiddenRange" : (token_count == 1 ? "QwenCausalLMDecodeRange" : "QwenCausalLMPrefillRange"));
+
+    DeviceTensor current_hidden = input_hidden;
+    DeviceTensor scratch_hidden;
+    const TensorDesc hidden_desc = TensorDesc::CreateContiguous(DataType::kFloat32, {token_count, params.hidden_size});
+    if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &scratch_hidden, error_message)) {
+        return false;
+    }
+
+    const bool decode_mode = token_count == 1;
+    for (std::size_t layer_index = start_layer; layer_index < end_layer; ++layer_index) {
+        const bool is_last_layer = layer_index + 1 == end_layer;
+        const DeviceTensor layer_output = (!apply_final_norm && is_last_layer) ? output : scratch_hidden;
+
+        QwenBlockParams block_params;
+        block_params.attention.num_attention_heads = params.num_attention_heads;
+        block_params.attention.num_key_value_heads = params.num_key_value_heads;
+        block_params.attention.head_dim = params.head_dim;
+        block_params.attention.rotary_dim = params.head_dim;
+        block_params.attention.position_offset = position_offset;
+        block_params.attention.rope_theta = params.rope_theta;
+        block_params.attention.rms_epsilon = params.rms_norm_eps;
+        block_params.mlp.intermediate_size = params.intermediate_size;
+        block_params.rms_epsilon = params.rms_norm_eps;
+
+        const bool block_ok = kv_cache == nullptr
+            ? QwenBlock::Run(context,
+                             pipeline_cache,
+                             current_hidden,
+                             weights.blocks[layer_index],
+                             layer_output,
+                             block_params,
+                             temporary_arena,
+                             error_message)
+            : (decode_mode
+                ? QwenBlock::RunDecode(context,
+                                       pipeline_cache,
+                                       current_hidden,
+                                       weights.blocks[layer_index],
+                                       kv_cache,
+                                       layer_index,
+                                       layer_output,
+                                       block_params,
+                                       temporary_arena,
+                                       error_message)
+                : QwenBlock::RunPrefill(context,
+                                        pipeline_cache,
+                                        current_hidden,
+                                        weights.blocks[layer_index],
+                                        kv_cache,
+                                        layer_index,
+                                        layer_output,
+                                        block_params,
+                                        temporary_arena,
+                                        error_message));
+        if (!block_ok) {
+            return false;
+        }
+
+        if (!is_last_layer || apply_final_norm) {
+            current_hidden = layer_output;
+            if (!(is_last_layer && apply_final_norm)) {
+                if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &scratch_hidden, error_message)) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    if (!apply_final_norm) {
+        return true;
+    }
+
+    RmsNormParams final_norm_params;
+    final_norm_params.epsilon = params.rms_norm_eps;
+    final_norm_params.row_count = static_cast<std::uint32_t>(token_count);
+    final_norm_params.row_size = static_cast<std::uint32_t>(params.hidden_size);
+    return RmsNormOp::Run(context,
+                          pipeline_cache,
+                          current_hidden,
+                          weights.final_norm_weight,
+                          output,
+                          final_norm_params,
+                          temporary_arena,
+                          error_message);
+}
+
 }  // namespace
 
 QwenCausalLM::QwenCausalLM(QwenCausalLMWeights weights, QwenCausalLMParams params)
@@ -44,6 +210,28 @@ bool QwenCausalLM::ForwardHidden(const MetalContext& context,
                                  BufferArena* temporary_arena,
                                  std::size_t position_offset,
                                  std::string* error_message) const {
+    return ForwardHiddenRange(context,
+                              pipeline_cache,
+                              token_ids,
+                              output,
+                              temporary_arena,
+                              position_offset,
+                              0,
+                              weights_.blocks.size(),
+                              true,
+                              error_message);
+}
+
+bool QwenCausalLM::ForwardHiddenRange(const MetalContext& context,
+                                      PipelineCache* pipeline_cache,
+                                      const DeviceTensor& token_ids,
+                                      const DeviceTensor& output,
+                                      BufferArena* temporary_arena,
+                                      std::size_t position_offset,
+                                      std::size_t start_layer,
+                                      std::size_t end_layer,
+                                      bool apply_final_norm,
+                                      std::string* error_message) const {
     if (!token_ids.IsValid() || !output.IsValid()) {
         if (error_message != nullptr) {
             *error_message = "QwenCausalLM hidden forward expects valid tensors";
@@ -64,14 +252,19 @@ bool QwenCausalLM::ForwardHidden(const MetalContext& context,
         }
         return false;
     }
+    if (!ValidateLayerRange(start_layer, end_layer, weights_.blocks.size(), error_message)) {
+        return false;
+    }
+    if (start_layer != 0) {
+        if (error_message != nullptr) {
+            *error_message = "token-based qwen layer ranges must start at layer 0";
+        }
+        return false;
+    }
 
-    BufferArenaMarkGuard arena_mark(temporary_arena, "QwenCausalLMHidden");
-
-    DeviceTensor hidden_states;
-    DeviceTensor next_hidden_states;
     const TensorDesc hidden_desc = TensorDesc::CreateContiguous(DataType::kFloat32, {token_count, params_.hidden_size});
-    if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &hidden_states, error_message) ||
-        !AllocateTemporaryTensor(temporary_arena, hidden_desc, &next_hidden_states, error_message)) {
+    DeviceTensor hidden_states;
+    if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &hidden_states, error_message)) {
         return false;
     }
 
@@ -89,43 +282,44 @@ bool QwenCausalLM::ForwardHidden(const MetalContext& context,
                           error_message)) {
         return false;
     }
+    return RunBlockRange(context,
+                         pipeline_cache,
+                         weights_,
+                         params_,
+                         hidden_states,
+                         nullptr,
+                         output,
+                         temporary_arena,
+                         position_offset,
+                         start_layer,
+                         end_layer,
+                         apply_final_norm,
+                         error_message);
+}
 
-    for (std::size_t layer_index = 0; layer_index < weights_.blocks.size(); ++layer_index) {
-        QwenBlockParams block_params;
-        block_params.attention.num_attention_heads = params_.num_attention_heads;
-        block_params.attention.num_key_value_heads = params_.num_key_value_heads;
-        block_params.attention.head_dim = params_.head_dim;
-        block_params.attention.rotary_dim = params_.head_dim;
-        block_params.attention.position_offset = position_offset;
-        block_params.attention.rope_theta = params_.rope_theta;
-        block_params.attention.rms_epsilon = params_.rms_norm_eps;
-        block_params.mlp.intermediate_size = params_.intermediate_size;
-        block_params.rms_epsilon = params_.rms_norm_eps;
-        if (!QwenBlock::Run(context,
-                            pipeline_cache,
-                            hidden_states,
-                            weights_.blocks[layer_index],
-                            next_hidden_states,
-                            block_params,
-                            temporary_arena,
-                            error_message)) {
-            return false;
-        }
-        std::swap(hidden_states, next_hidden_states);
-    }
-
-    RmsNormParams final_norm_params;
-    final_norm_params.epsilon = params_.rms_norm_eps;
-    final_norm_params.row_count = static_cast<std::uint32_t>(token_count);
-    final_norm_params.row_size = static_cast<std::uint32_t>(params_.hidden_size);
-    return RmsNormOp::Run(context,
-                          pipeline_cache,
-                          hidden_states,
-                          weights_.final_norm_weight,
-                          output,
-                          final_norm_params,
-                          temporary_arena,
-                          error_message);
+bool QwenCausalLM::ForwardHiddenFromStatesRange(const MetalContext& context,
+                                                PipelineCache* pipeline_cache,
+                                                const DeviceTensor& hidden_states,
+                                                const DeviceTensor& output,
+                                                BufferArena* temporary_arena,
+                                                std::size_t position_offset,
+                                                std::size_t start_layer,
+                                                std::size_t end_layer,
+                                                bool apply_final_norm,
+                                                std::string* error_message) const {
+    return RunBlockRange(context,
+                         pipeline_cache,
+                         weights_,
+                         params_,
+                         hidden_states,
+                         nullptr,
+                         output,
+                         temporary_arena,
+                         position_offset,
+                         start_layer,
+                         end_layer,
+                         apply_final_norm,
+                         error_message);
 }
 
 bool QwenCausalLM::ForwardHiddenCached(const MetalContext& context,
@@ -136,6 +330,30 @@ bool QwenCausalLM::ForwardHiddenCached(const MetalContext& context,
                                        BufferArena* temporary_arena,
                                        std::size_t position_offset,
                                        std::string* error_message) const {
+    return ForwardHiddenCachedRange(context,
+                                    pipeline_cache,
+                                    token_ids,
+                                    kv_cache,
+                                    output,
+                                    temporary_arena,
+                                    position_offset,
+                                    0,
+                                    weights_.blocks.size(),
+                                    true,
+                                    error_message);
+}
+
+bool QwenCausalLM::ForwardHiddenCachedRange(const MetalContext& context,
+                                            PipelineCache* pipeline_cache,
+                                            const DeviceTensor& token_ids,
+                                            KVCache* kv_cache,
+                                            const DeviceTensor& output,
+                                            BufferArena* temporary_arena,
+                                            std::size_t position_offset,
+                                            std::size_t start_layer,
+                                            std::size_t end_layer,
+                                            bool apply_final_norm,
+                                            std::string* error_message) const {
     if (kv_cache == nullptr) {
         if (error_message != nullptr) {
             *error_message = "QwenCausalLM cached forward requires a KVCache";
@@ -148,15 +366,20 @@ bool QwenCausalLM::ForwardHiddenCached(const MetalContext& context,
         }
         return false;
     }
+    if (!ValidateLayerRange(start_layer, end_layer, weights_.blocks.size(), error_message)) {
+        return false;
+    }
+    if (start_layer != 0) {
+        if (error_message != nullptr) {
+            *error_message = "token-based qwen layer ranges must start at layer 0";
+        }
+        return false;
+    }
 
     const std::size_t token_count = token_ids.GetDesc().GetShape()[0];
-    BufferArenaMarkGuard arena_mark(temporary_arena, token_count == 1 ? "QwenCausalLMDecode" : "QwenCausalLMPrefill");
-
-    DeviceTensor hidden_states;
-    DeviceTensor next_hidden_states;
     const TensorDesc hidden_desc = TensorDesc::CreateContiguous(DataType::kFloat32, {token_count, params_.hidden_size});
-    if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &hidden_states, error_message) ||
-        !AllocateTemporaryTensor(temporary_arena, hidden_desc, &next_hidden_states, error_message)) {
+    DeviceTensor hidden_states;
+    if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &hidden_states, error_message)) {
         return false;
     }
 
@@ -174,58 +397,51 @@ bool QwenCausalLM::ForwardHiddenCached(const MetalContext& context,
                           error_message)) {
         return false;
     }
+    return RunBlockRange(context,
+                         pipeline_cache,
+                         weights_,
+                         params_,
+                         hidden_states,
+                         kv_cache,
+                         output,
+                         temporary_arena,
+                         position_offset,
+                         start_layer,
+                         end_layer,
+                         apply_final_norm,
+                         error_message);
+}
 
-    const bool decode_mode = token_count == 1;
-    for (std::size_t layer_index = 0; layer_index < weights_.blocks.size(); ++layer_index) {
-        QwenBlockParams block_params;
-        block_params.attention.num_attention_heads = params_.num_attention_heads;
-        block_params.attention.num_key_value_heads = params_.num_key_value_heads;
-        block_params.attention.head_dim = params_.head_dim;
-        block_params.attention.rotary_dim = params_.head_dim;
-        block_params.attention.position_offset = position_offset;
-        block_params.attention.rope_theta = params_.rope_theta;
-        block_params.attention.rms_epsilon = params_.rms_norm_eps;
-        block_params.mlp.intermediate_size = params_.intermediate_size;
-        block_params.rms_epsilon = params_.rms_norm_eps;
-        const bool block_ok = decode_mode
-            ? QwenBlock::RunDecode(context,
-                                   pipeline_cache,
-                                   hidden_states,
-                                   weights_.blocks[layer_index],
-                                   kv_cache,
-                                   layer_index,
-                                   next_hidden_states,
-                                   block_params,
-                                   temporary_arena,
-                                   error_message)
-            : QwenBlock::RunPrefill(context,
-                                    pipeline_cache,
-                                    hidden_states,
-                                    weights_.blocks[layer_index],
-                                    kv_cache,
-                                    layer_index,
-                                    next_hidden_states,
-                                    block_params,
-                                    temporary_arena,
-                                    error_message);
-        if (!block_ok) {
-            return false;
+bool QwenCausalLM::ForwardHiddenFromStatesCachedRange(const MetalContext& context,
+                                                      PipelineCache* pipeline_cache,
+                                                      const DeviceTensor& hidden_states,
+                                                      KVCache* kv_cache,
+                                                      const DeviceTensor& output,
+                                                      BufferArena* temporary_arena,
+                                                      std::size_t position_offset,
+                                                      std::size_t start_layer,
+                                                      std::size_t end_layer,
+                                                      bool apply_final_norm,
+                                                      std::string* error_message) const {
+    if (kv_cache == nullptr) {
+        if (error_message != nullptr) {
+            *error_message = "QwenCausalLM cached forward requires a KVCache";
         }
-        std::swap(hidden_states, next_hidden_states);
+        return false;
     }
-
-    RmsNormParams final_norm_params;
-    final_norm_params.epsilon = params_.rms_norm_eps;
-    final_norm_params.row_count = static_cast<std::uint32_t>(token_count);
-    final_norm_params.row_size = static_cast<std::uint32_t>(params_.hidden_size);
-    return RmsNormOp::Run(context,
-                          pipeline_cache,
-                          hidden_states,
-                          weights_.final_norm_weight,
-                          output,
-                          final_norm_params,
-                          temporary_arena,
-                          error_message);
+    return RunBlockRange(context,
+                         pipeline_cache,
+                         weights_,
+                         params_,
+                         hidden_states,
+                         kv_cache,
+                         output,
+                         temporary_arena,
+                         position_offset,
+                         start_layer,
+                         end_layer,
+                         apply_final_norm,
+                         error_message);
 }
 
 bool QwenCausalLM::ForwardLogits(const MetalContext& context,
@@ -244,7 +460,7 @@ bool QwenCausalLM::ForwardLogits(const MetalContext& context,
     if (!ForwardHidden(context, pipeline_cache, token_ids, hidden_states, temporary_arena, position_offset, error_message)) {
         return false;
     }
-    return ComputeLogitsFromHidden(context, pipeline_cache, hidden_states, logits_output, temporary_arena, error_message);
+    return ForwardLogitsFromHidden(context, pipeline_cache, hidden_states, logits_output, temporary_arena, error_message);
 }
 
 bool QwenCausalLM::ForwardLogitsCached(const MetalContext& context,
@@ -264,6 +480,15 @@ bool QwenCausalLM::ForwardLogitsCached(const MetalContext& context,
     if (!ForwardHiddenCached(context, pipeline_cache, token_ids, kv_cache, hidden_states, temporary_arena, position_offset, error_message)) {
         return false;
     }
+    return ForwardLogitsFromHidden(context, pipeline_cache, hidden_states, logits_output, temporary_arena, error_message);
+}
+
+bool QwenCausalLM::ForwardLogitsFromHidden(const MetalContext& context,
+                                           PipelineCache* pipeline_cache,
+                                           const DeviceTensor& hidden_states,
+                                           const DeviceTensor& logits_output,
+                                           BufferArena* temporary_arena,
+                                           std::string* error_message) const {
     return ComputeLogitsFromHidden(context, pipeline_cache, hidden_states, logits_output, temporary_arena, error_message);
 }
 

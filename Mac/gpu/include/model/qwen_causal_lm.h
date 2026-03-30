@@ -53,6 +53,28 @@ public:
                        std::size_t position_offset,
                        std::string* error_message) const;
 
+    bool ForwardHiddenRange(const MetalContext& context,
+                           PipelineCache* pipeline_cache,
+                           const DeviceTensor& token_ids,
+                           const DeviceTensor& output,
+                           BufferArena* temporary_arena,
+                           std::size_t position_offset,
+                           std::size_t start_layer,
+                           std::size_t end_layer,
+                           bool apply_final_norm,
+                           std::string* error_message) const;
+
+    bool ForwardHiddenFromStatesRange(const MetalContext& context,
+                                      PipelineCache* pipeline_cache,
+                                      const DeviceTensor& hidden_states,
+                                      const DeviceTensor& output,
+                                      BufferArena* temporary_arena,
+                                      std::size_t position_offset,
+                                      std::size_t start_layer,
+                                      std::size_t end_layer,
+                                      bool apply_final_norm,
+                                      std::string* error_message) const;
+
     bool ForwardHiddenCached(const MetalContext& context,
                              PipelineCache* pipeline_cache,
                              const DeviceTensor& token_ids,
@@ -61,6 +83,30 @@ public:
                              BufferArena* temporary_arena,
                              std::size_t position_offset,
                              std::string* error_message) const;
+
+    bool ForwardHiddenCachedRange(const MetalContext& context,
+                                  PipelineCache* pipeline_cache,
+                                  const DeviceTensor& token_ids,
+                                  KVCache* kv_cache,
+                                  const DeviceTensor& output,
+                                  BufferArena* temporary_arena,
+                                  std::size_t position_offset,
+                                  std::size_t start_layer,
+                                  std::size_t end_layer,
+                                  bool apply_final_norm,
+                                  std::string* error_message) const;
+
+    bool ForwardHiddenFromStatesCachedRange(const MetalContext& context,
+                                            PipelineCache* pipeline_cache,
+                                            const DeviceTensor& hidden_states,
+                                            KVCache* kv_cache,
+                                            const DeviceTensor& output,
+                                            BufferArena* temporary_arena,
+                                            std::size_t position_offset,
+                                            std::size_t start_layer,
+                                            std::size_t end_layer,
+                                            bool apply_final_norm,
+                                            std::string* error_message) const;
 
     bool ForwardLogits(const MetalContext& context,
                        PipelineCache* pipeline_cache,
@@ -78,6 +124,13 @@ public:
                              BufferArena* temporary_arena,
                              std::size_t position_offset,
                              std::string* error_message) const;
+
+    bool ForwardLogitsFromHidden(const MetalContext& context,
+                                 PipelineCache* pipeline_cache,
+                                 const DeviceTensor& hidden_states,
+                                 const DeviceTensor& logits_output,
+                                 BufferArena* temporary_arena,
+                                 std::string* error_message) const;
 
     const QwenCausalLMWeights& weights() const;
     const QwenCausalLMParams& params() const;

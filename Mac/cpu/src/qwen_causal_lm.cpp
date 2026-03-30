@@ -17,6 +17,26 @@ void RequireContiguous(const Tensor& tensor, const char* name) {
         throw std::runtime_error(std::string(name) + " must be contiguous");
     }
 }
+
+void RequireLayerRange(std::size_t start_layer, std::size_t end_layer, std::size_t total_layers) {
+    if (start_layer > end_layer || end_layer > total_layers) {
+        throw std::runtime_error("invalid qwen layer range");
+    }
+}
+
+Tensor RunBlockRange(const std::vector<QwenBlock>& blocks,
+                     Tensor hidden_states,
+                     TensorKVCache* cache,
+                     std::size_t start_layer,
+                     std::size_t end_layer,
+                     std::size_t position_offset) {
+    for (std::size_t layer_index = start_layer; layer_index < end_layer; ++layer_index) {
+        hidden_states = cache == nullptr
+            ? blocks[layer_index].Forward(hidden_states, position_offset)
+            : blocks[layer_index].ForwardCached(hidden_states, *cache, layer_index, position_offset);
+    }
+    return hidden_states;
+}
 }
 
 QwenCausalLM::QwenCausalLM(Embedding embed_tokens, std::vector<QwenBlock> blocks, RMSNormModule final_norm)
@@ -48,31 +68,70 @@ std::size_t QwenCausalLM::head_dim() const {
 }
 
 Tensor QwenCausalLM::ForwardHidden(const Tensor& token_ids, std::size_t position_offset) const {
-    Tensor hidden_states = embed_tokens_.Forward(token_ids);
-    for (const QwenBlock& block : blocks_) {
-        hidden_states = block.Forward(hidden_states, position_offset);
-    }
-    return final_norm_.Forward(hidden_states);
+    return ForwardHiddenRange(token_ids, 0, blocks_.size(), position_offset, true);
 }
 
 Tensor QwenCausalLM::ForwardHiddenCached(const Tensor& token_ids, TensorKVCache& cache, std::size_t position_offset) const {
-    Tensor hidden_states = embed_tokens_.Forward(token_ids);
-    for (std::size_t layer_index = 0; layer_index < blocks_.size(); ++layer_index) {
-        hidden_states = blocks_[layer_index].ForwardCached(hidden_states, cache, layer_index, position_offset);
-    }
-    return final_norm_.Forward(hidden_states);
+    return ForwardHiddenCachedRange(token_ids, cache, 0, blocks_.size(), position_offset, true);
 }
 
 Tensor QwenCausalLM::ForwardLogits(const Tensor& token_ids, std::size_t position_offset) const {
     const Tensor hidden_states = ForwardHidden(token_ids, position_offset);
-    if (lm_head_.has_value()) {
-        return lm_head_->Forward(hidden_states);
-    }
-    return ComputeTiedLogits(hidden_states);
+    return ForwardLogitsFromHidden(hidden_states);
 }
 
 Tensor QwenCausalLM::ForwardLogitsCached(const Tensor& token_ids, TensorKVCache& cache, std::size_t position_offset) const {
     const Tensor hidden_states = ForwardHiddenCached(token_ids, cache, position_offset);
+    return ForwardLogitsFromHidden(hidden_states);
+}
+
+Tensor QwenCausalLM::ForwardHiddenRange(const Tensor& token_ids,
+                                        std::size_t start_layer,
+                                        std::size_t end_layer,
+                                        std::size_t position_offset,
+                                        bool apply_final_norm) const {
+    RequireLayerRange(start_layer, end_layer, blocks_.size());
+    Require(start_layer == 0, "token-based qwen layer ranges must start at layer 0");
+    Tensor hidden_states = embed_tokens_.Forward(token_ids);
+    hidden_states = RunBlockRange(blocks_, std::move(hidden_states), nullptr, start_layer, end_layer, position_offset);
+    return apply_final_norm ? final_norm_.Forward(hidden_states) : hidden_states;
+}
+
+Tensor QwenCausalLM::ForwardHiddenCachedRange(const Tensor& token_ids,
+                                              TensorKVCache& cache,
+                                              std::size_t start_layer,
+                                              std::size_t end_layer,
+                                              std::size_t position_offset,
+                                              bool apply_final_norm) const {
+    RequireLayerRange(start_layer, end_layer, blocks_.size());
+    Require(start_layer == 0, "token-based qwen layer ranges must start at layer 0");
+    Tensor hidden_states = embed_tokens_.Forward(token_ids);
+    hidden_states = RunBlockRange(blocks_, std::move(hidden_states), &cache, start_layer, end_layer, position_offset);
+    return apply_final_norm ? final_norm_.Forward(hidden_states) : hidden_states;
+}
+
+Tensor QwenCausalLM::ForwardHiddenFromStatesRange(const Tensor& hidden_states,
+                                                  std::size_t start_layer,
+                                                  std::size_t end_layer,
+                                                  std::size_t position_offset,
+                                                  bool apply_final_norm) const {
+    RequireLayerRange(start_layer, end_layer, blocks_.size());
+    Tensor output = RunBlockRange(blocks_, hidden_states, nullptr, start_layer, end_layer, position_offset);
+    return apply_final_norm ? final_norm_.Forward(output) : output;
+}
+
+Tensor QwenCausalLM::ForwardHiddenFromStatesCachedRange(const Tensor& hidden_states,
+                                                        TensorKVCache& cache,
+                                                        std::size_t start_layer,
+                                                        std::size_t end_layer,
+                                                        std::size_t position_offset,
+                                                        bool apply_final_norm) const {
+    RequireLayerRange(start_layer, end_layer, blocks_.size());
+    Tensor output = RunBlockRange(blocks_, hidden_states, &cache, start_layer, end_layer, position_offset);
+    return apply_final_norm ? final_norm_.Forward(output) : output;
+}
+
+Tensor QwenCausalLM::ForwardLogitsFromHidden(const Tensor& hidden_states) const {
     if (lm_head_.has_value()) {
         return lm_head_->Forward(hidden_states);
     }

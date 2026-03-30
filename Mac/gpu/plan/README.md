@@ -75,6 +75,15 @@
 9. [09_TEST_RESULTS.md](09_TEST_RESULTS.md)
    현재 저장된 test result 위치와 후속 작업 정리
 
+10. [10_PROMPT_SWEEP.md](10_PROMPT_SWEEP.md)
+   short/medium/long prompt sweep 결과와 해석
+
+11. [11_EXECUTION_BOUNDARIES.md](11_EXECUTION_BOUNDARIES.md)
+   `gpu_infer --layer` 실행 모드, CPU/GPU 단계 경계, 남은 CPU 체크리스트, 메모리 lifetime 정리
+
+12. [12_LAYER_SPLIT_BENCHMARK.md](12_LAYER_SPLIT_BENCHMARK.md)
+   `gpu_infer --layer 1..N-1,-1` / `max_new_tokens=64` 실측 benchmark 결과
+
 ## Current Test Result Paths
 
 현재 real-bundle regression 결과는 두 군데에 남긴다.
@@ -114,7 +123,49 @@ make build-infer
    --max-new-tokens 16
 ```
 
-기본 출력은 plain text 한 줄이며, `--verbose`를 주면 token ids와 GPU timing 요약을 stderr에 함께 출력한다.
+stdin 입력:
+
+```sh
+printf 'Write one short friendly reply to: Hello world\n' | \
+./build/bin/gpu_infer \
+   --manifest /Users/song-ganghui/Documents/SoC/models/cpp/qwen3-0.6b/manifest.json \
+   --prompt-file - \
+   --max-new-tokens 16
+```
+
+JSON 출력:
+
+```sh
+./build/bin/gpu_infer \
+   --manifest /Users/song-ganghui/Documents/SoC/models/cpp/qwen3-0.6b/manifest.json \
+   --prompt 'Write one short friendly reply to: Hello world' \
+   --max-new-tokens 16 \
+   --json \
+   --output-file build/reports/quick/infer.json
+```
+
+기본 출력은 plain text 한 줄이며, `--output-file`을 주면 해당 payload를 파일에 쓴다. `--json`을 주면 prompt, token ids, generated text, device, GPU timing을 포함한 JSON object를 쓴다. `--verbose`를 주면 token ids와 GPU timing 요약을 stderr에 함께 출력한다.
+
+layer split 예시:
+
+```sh
+./build/bin/gpu_infer \
+   --manifest /Users/song-ganghui/Documents/SoC/models/cpp/qwen3-0.6b/manifest.json \
+   --prompt 'Hello world' \
+   --max-new-tokens 16 \
+   --layer 8 \
+   --json
+```
+
+`--layer 0`은 full CPU, `--layer 1..N-1`은 hybrid, `--layer -1` 또는 `--layer N`은 full GPU다. `N`은 manifest의 `num_hidden_layers`이며, 이 값을 넘기면 즉시 오류를 낸다. 현재 CPU/GPU 단계 경계와 남은 CPU 구간 체크리스트는 [11_EXECUTION_BOUNDARIES.md](11_EXECUTION_BOUNDARIES.md)에 정리했다.
+
+레이어별 실측 benchmark는 다음으로 다시 만들 수 있다.
+
+```sh
+make benchmark-layer-split
+```
+
+현재 측정값 요약은 [12_LAYER_SPLIT_BENCHMARK.md](12_LAYER_SPLIT_BENCHMARK.md)에 고정했다.
 
 ## Immediate Direction
 

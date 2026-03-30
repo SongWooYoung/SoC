@@ -12,6 +12,7 @@ enum class KernelKind {
     kRmsNorm,
     kRoPE,
     kSoftmax,
+    kSamplerTopK,
     kAttentionScores,
     kAttentionValues,
     kMatMul,

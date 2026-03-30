@@ -108,7 +108,15 @@ bool GenerationContext::DecodeNextToken(const MetalContext& context,
                               error_message)) {
         return false;
     }
-    if (!sampler_.SampleFromLogits(logits_tensor, 0, &result->token_id, &result->top_logits, &result->top_token_ids, error_message)) {
+    if (!sampler_.SampleFromLogits(context,
+                                   pipeline_cache,
+                                   logits_tensor,
+                                   0,
+                                   &result->token_id,
+                                   &result->top_logits,
+                                   &result->top_token_ids,
+                                   temporary_arena,
+                                   error_message)) {
         return false;
     }
     running_token_ids_.push_back(result->token_id);
@@ -142,11 +150,14 @@ bool GenerationContext::Generate(const MetalContext& context,
                                       0,
                                       TensorDesc::CreateContiguous(DataType::kFloat32,
                                                                    {prompt_token_ids.size(), model_.vocab_size()}));
-    if (!sampler_.SampleFromLogits(prefill_logits,
+    if (!sampler_.SampleFromLogits(context,
+                                   pipeline_cache,
+                                   prefill_logits,
                                    prompt_token_ids.size() - 1,
                                    &first_step_result.token_id,
                                    &first_step_result.top_logits,
                                    &first_step_result.top_token_ids,
+                                   temporary_arena,
                                    error_message)) {
         return false;
     }

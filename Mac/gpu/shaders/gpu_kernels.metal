@@ -44,6 +44,13 @@ struct SoftmaxParams {
 	uint row_size;
 };
 
+struct SamplerTopKParams {
+	uint row_count;
+	uint row_size;
+	uint top_k;
+	uint padding;
+};
+
 struct ElementwiseMulParams {
 	uint row_count;
 	uint row_size;
@@ -189,6 +196,46 @@ kernel void softmax_f32_rowwise(const device float* input_values [[buffer(0)]],
 	}
 	for (uint index = 0; index < params.row_size; ++index) {
 		output_values[base + index] = output_values[base + index] / sum_value;
+	}
+}
+
+kernel void sampler_topk_f32_rowwise(const device float* input_values [[buffer(0)]],
+					 device float* top_values [[buffer(1)]],
+					 device int* top_indices [[buffer(2)]],
+					 constant SamplerTopKParams& params [[buffer(3)]],
+					 uint gid [[thread_position_in_grid]]) {
+	constexpr uint kMaxTopK = 64;
+	if (gid >= params.row_count || params.top_k == 0 || params.top_k > kMaxTopK) {
+		return;
+	}
+
+	float best_values[kMaxTopK];
+	int best_indices[kMaxTopK];
+	for (uint rank = 0; rank < params.top_k; ++rank) {
+		best_values[rank] = -INFINITY;
+		best_indices[rank] = -1;
+	}
+
+	const uint row_base = gid * params.row_size;
+	for (uint vocab_index = 0; vocab_index < params.row_size; ++vocab_index) {
+		const float value = input_values[row_base + vocab_index];
+		for (uint rank = 0; rank < params.top_k; ++rank) {
+			if (value > best_values[rank]) {
+				for (uint shift = params.top_k - 1; shift > rank; --shift) {
+					best_values[shift] = best_values[shift - 1];
+					best_indices[shift] = best_indices[shift - 1];
+				}
+				best_values[rank] = value;
+				best_indices[rank] = static_cast<int>(vocab_index);
+				break;
+			}
+		}
+	}
+
+	const uint output_base = gid * params.top_k;
+	for (uint rank = 0; rank < params.top_k; ++rank) {
+		top_values[output_base + rank] = best_values[rank];
+		top_indices[output_base + rank] = best_indices[rank];
 	}
 }
 

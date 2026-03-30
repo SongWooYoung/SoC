@@ -23,6 +23,29 @@ public:
     Tensor ForwardLogits(const Tensor& token_ids, std::size_t position_offset = 0) const;
     Tensor ForwardHiddenCached(const Tensor& token_ids, TensorKVCache& cache, std::size_t position_offset = 0) const;
     Tensor ForwardLogitsCached(const Tensor& token_ids, TensorKVCache& cache, std::size_t position_offset = 0) const;
+    Tensor ForwardHiddenRange(const Tensor& token_ids,
+                              std::size_t start_layer,
+                              std::size_t end_layer,
+                              std::size_t position_offset = 0,
+                              bool apply_final_norm = true) const;
+    Tensor ForwardHiddenCachedRange(const Tensor& token_ids,
+                                    TensorKVCache& cache,
+                                    std::size_t start_layer,
+                                    std::size_t end_layer,
+                                    std::size_t position_offset = 0,
+                                    bool apply_final_norm = true) const;
+    Tensor ForwardHiddenFromStatesRange(const Tensor& hidden_states,
+                                        std::size_t start_layer,
+                                        std::size_t end_layer,
+                                        std::size_t position_offset = 0,
+                                        bool apply_final_norm = true) const;
+    Tensor ForwardHiddenFromStatesCachedRange(const Tensor& hidden_states,
+                                              TensorKVCache& cache,
+                                              std::size_t start_layer,
+                                              std::size_t end_layer,
+                                              std::size_t position_offset = 0,
+                                              bool apply_final_norm = true) const;
+    Tensor ForwardLogitsFromHidden(const Tensor& hidden_states) const;
 
 private:
     Tensor ComputeTiedLogits(const Tensor& hidden_states) const;

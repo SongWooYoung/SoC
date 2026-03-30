@@ -48,11 +48,16 @@ SWEEP_REPORT_DIR := $(abspath $(REPORT_DIR)/sweep_cases)
 QUICK_REAL_BUNDLE_REPORT := $(abspath $(QUICK_REPORT_DIR)/test_real_bundle_regression_report.md)
 QUICK_SWEEP_SUMMARY := $(abspath $(QUICK_REPORT_DIR)/test_real_bundle_sweep_summary.md)
 QUICK_SWEEP_REPORT_DIR := $(abspath $(QUICK_REPORT_DIR)/sweep_cases)
+LAYER_BENCH_OUTPUT_DIR := $(abspath $(REPORT_DIR)/layer_split_benchmark)
+LAYER_BENCH_REPORT := $(abspath $(REPORT_DIR)/layer_split_benchmark.md)
+LAYER_BENCH_PROMPT ?= Hello world
+LAYER_BENCH_MAX_NEW_TOKENS ?= 64
 ACTIVE_REAL_BUNDLE_REPORT ?= $(REAL_BUNDLE_REPORT)
 ACTIVE_SWEEP_SUMMARY ?= $(SWEEP_SUMMARY)
 ACTIVE_SWEEP_REPORT_DIR ?= $(SWEEP_REPORT_DIR)
 REAL_BUNDLE_MAX_NEW_TOKENS ?= 8
 SWEEP_MAX_NEW_TOKENS ?= 8
+PYTHON_BIN ?= /Users/song-ganghui/Documents/SoC/.venv/bin/python
 
 METAL := xcrun -sdk macosx metal
 METALLIB_TOOL := xcrun -sdk macosx metallib
@@ -80,7 +85,7 @@ DEPFILES := $(CPP_OBJS:.o=.d) $(MM_OBJS:.o=.d) $(CPU_CPP_OBJS:.o=.d) $(MAIN_OBJ:
 
 DEPFILES += $(INFER_OBJ:.o=.d)
 
-.PHONY: all build-shaders build-main build-infer build-tests build-benchmarks check integration integration-real-bundle integration-sweep integration-sweep-quick run infer benchmark regression real-bundle-regression real-bundle-regression-quick clean
+.PHONY: all build-shaders build-main build-infer build-tests build-benchmarks check integration integration-real-bundle integration-sweep integration-sweep-quick run infer benchmark benchmark-layer-split regression real-bundle-regression real-bundle-regression-quick clean
 
 all: build-main
 
@@ -142,6 +147,16 @@ infer: $(INFER_BIN)
 
 benchmark: $(MATMUL_BENCH_BIN)
 	$(MATMUL_BENCH_BIN)
+
+benchmark-layer-split: $(INFER_BIN)
+	@test -f $(REAL_QWEN3_MANIFEST) || (echo "missing real export bundle: $(REAL_QWEN3_MANIFEST)" && exit 1)
+	$(PYTHON_BIN) tools/benchmark_layer_split.py \
+		--infer-bin $(INFER_BIN) \
+		--manifest $(REAL_QWEN3_MANIFEST) \
+		--output-dir $(LAYER_BENCH_OUTPUT_DIR) \
+		--report-path $(LAYER_BENCH_REPORT) \
+		--prompt "$(LAYER_BENCH_PROMPT)" \
+		--max-new-tokens $(LAYER_BENCH_MAX_NEW_TOKENS)
 
 regression:
 	$(MAKE) clean
