@@ -84,6 +84,38 @@
 
 첫 번째는 test를 다시 돌릴 때 갱신되는 실행 결과이고, 두 번째는 현재 확인된 baseline과 남은 작업을 repo 안에 고정해 두는 문서다.
 
+## Inference CLI
+
+`Mac/gpu/main.mm`는 Metal bootstrap 확인용이고, 실제 텍스트 추론용 엔트리포인트는 `Mac/gpu/infer.mm`이다.
+
+빌드:
+
+```sh
+cd /Users/song-ganghui/Documents/SoC/Mac/gpu
+make build-infer
+```
+
+직접 prompt 전달:
+
+```sh
+./build/bin/gpu_infer \
+   --manifest /Users/song-ganghui/Documents/SoC/models/cpp/qwen3-0.6b/manifest.json \
+   --prompt 'Write one short friendly reply to: Hello world' \
+   --max-new-tokens 16
+```
+
+파일 입력:
+
+```sh
+./build/bin/gpu_infer \
+   --manifest /Users/song-ganghui/Documents/SoC/models/cpp/qwen3-0.6b/manifest.json \
+   --prompt-file build/prompt.txt \
+   --apply-chat-template \
+   --max-new-tokens 16
+```
+
+기본 출력은 plain text 한 줄이며, `--verbose`를 주면 token ids와 GPU timing 요약을 stderr에 함께 출력한다.
+
 ## Immediate Direction
 
 첫 타겟은 `Qwen/Qwen3-0.6B`다. 구현은 아래 순서를 따른다.

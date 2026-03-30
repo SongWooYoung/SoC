@@ -19,6 +19,7 @@ QUICK_REPORT_DIR := $(REPORT_DIR)/quick
 METALLIB := $(SHADER_BUILD_DIR)/gpu.metallib
 SHADER_ENTRY := $(SHADER_DIR)/gpu_kernels.metal
 MAIN_TARGET := gpu_bootstrap
+INFER_TARGET := gpu_infer
 BOOTSTRAP_TEST_TARGET := test_metal_bootstrap
 RMSNORM_TEST_TARGET := test_rms_norm
 LINEAR_TEST_TARGET := test_linear
@@ -29,6 +30,7 @@ RUNTIME_TEST_TARGET := test_generation_context
 INTEGRATION_TEST_TARGET := test_real_bundle_regression
 MATMUL_BENCH_TARGET := bench_matmul
 MAIN_BIN := $(BIN_DIR)/$(MAIN_TARGET)
+INFER_BIN := $(BIN_DIR)/$(INFER_TARGET)
 BOOTSTRAP_TEST_BIN := $(BIN_DIR)/$(BOOTSTRAP_TEST_TARGET)
 RMSNORM_TEST_BIN := $(BIN_DIR)/$(RMSNORM_TEST_TARGET)
 LINEAR_TEST_BIN := $(BIN_DIR)/$(LINEAR_TEST_TARGET)
@@ -63,6 +65,7 @@ CPP_OBJS := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(CPP_SRCS))
 MM_OBJS := $(patsubst %.mm,$(OBJ_DIR)/%.o,$(MM_SRCS))
 CPU_CPP_OBJS := $(patsubst ../cpu/src/%.cpp,$(OBJ_DIR)/cpu/%.o,$(CPU_CPP_SRCS))
 MAIN_OBJ := $(OBJ_DIR)/main.o
+INFER_OBJ := $(OBJ_DIR)/infer.o
 BOOTSTRAP_TEST_OBJ := $(OBJ_DIR)/test/metal/test_metal_bootstrap.o
 RMSNORM_TEST_OBJ := $(OBJ_DIR)/test/kernel/test_rms_norm.o
 LINEAR_TEST_OBJ := $(OBJ_DIR)/test/kernel/test_linear.o
@@ -75,7 +78,9 @@ MATMUL_BENCH_OBJ := $(OBJ_DIR)/benchmark/bench_matmul.o
 AIR_FILE := $(AIR_DIR)/gpu_kernels.air
 DEPFILES := $(CPP_OBJS:.o=.d) $(MM_OBJS:.o=.d) $(CPU_CPP_OBJS:.o=.d) $(MAIN_OBJ:.o=.d) $(BOOTSTRAP_TEST_OBJ:.o=.d) $(RMSNORM_TEST_OBJ:.o=.d) $(LINEAR_TEST_OBJ:.o=.d) $(ASSET_TEST_OBJ:.o=.d) $(PHASE3_TEST_OBJ:.o=.d) $(MODULE_TEST_OBJ:.o=.d) $(RUNTIME_TEST_OBJ:.o=.d) $(INTEGRATION_TEST_OBJ:.o=.d) $(MATMUL_BENCH_OBJ:.o=.d)
 
-.PHONY: all build-shaders build-main build-tests build-benchmarks check integration integration-real-bundle integration-sweep integration-sweep-quick run benchmark regression real-bundle-regression real-bundle-regression-quick clean
+DEPFILES += $(INFER_OBJ:.o=.d)
+
+.PHONY: all build-shaders build-main build-infer build-tests build-benchmarks check integration integration-real-bundle integration-sweep integration-sweep-quick run infer benchmark regression real-bundle-regression real-bundle-regression-quick clean
 
 all: build-main
 
@@ -87,6 +92,8 @@ build-shaders:
 	fi
 
 build-main: $(MAIN_BIN)
+
+build-infer: $(INFER_BIN)
 
 build-tests: $(BOOTSTRAP_TEST_BIN) $(RMSNORM_TEST_BIN) $(LINEAR_TEST_BIN) $(ASSET_TEST_BIN) $(PHASE3_TEST_BIN) $(MODULE_TEST_BIN) $(RUNTIME_TEST_BIN) $(INTEGRATION_TEST_BIN)
 
@@ -130,6 +137,9 @@ integration-sweep-quick:
 run: $(MAIN_BIN)
 	$(MAIN_BIN)
 
+infer: $(INFER_BIN)
+	$(INFER_BIN) --help
+
 benchmark: $(MATMUL_BENCH_BIN)
 	$(MATMUL_BENCH_BIN)
 
@@ -154,6 +164,10 @@ real-bundle-regression-quick:
 $(MAIN_BIN): $(CPP_OBJS) $(MM_OBJS) $(MAIN_OBJ)
 	@mkdir -p $(BIN_DIR)
 	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(MAIN_OBJ) -o $@ $(LDFLAGS)
+
+$(INFER_BIN): $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(INFER_OBJ)
+	@mkdir -p $(BIN_DIR)
+	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(INFER_OBJ) -o $@ $(LDFLAGS)
 
 $(BOOTSTRAP_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(BOOTSTRAP_TEST_OBJ)
 	@mkdir -p $(BIN_DIR)
