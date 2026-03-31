@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import subprocess
 from pathlib import Path
@@ -24,18 +25,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--python-bin", default="python3")
     parser.add_argument("--pytorch-script", required=True)
     parser.add_argument("--pytorch-dtype", default="float32", choices=["float32", "float16", "bfloat16"])
+    parser.add_argument("--gpu-timeout-seconds", type=int, default=180)
+    parser.add_argument("--gpu-env", action="append", default=[])
     return parser.parse_args()
 
 
-def run_command(command: list[str]) -> None:
-    subprocess.run(command, check=True)
+def parse_env_overrides(values: list[str]) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    for value in values:
+        key, separator, payload = value.partition("=")
+        if not separator or not key:
+            raise ValueError(f"invalid --gpu-env entry: {value!r}")
+        overrides[key] = payload
+    return overrides
+
+
+def run_command(command: list[str], env: dict[str, str] | None = None, timeout_seconds: int | None = None) -> None:
+    subprocess.run(command, check=True, env=env, timeout=timeout_seconds)
 
 
 def run_gpu_case(infer_bin: Path,
                  manifest: Path,
                  prompt: str,
                  max_new_tokens: int,
-                 output_path: Path) -> dict:
+                 output_path: Path,
+                 env_overrides: dict[str, str],
+                 timeout_seconds: int) -> dict:
     command = [
         str(infer_bin),
         "--manifest",
@@ -50,7 +65,9 @@ def run_gpu_case(infer_bin: Path,
         "--output-file",
         str(output_path),
     ]
-    run_command(command)
+    env = os.environ.copy()
+    env.update(env_overrides)
+    run_command(command, env=env, timeout_seconds=timeout_seconds)
     return json.loads(output_path.read_text(encoding="utf-8"))
 
 
@@ -90,6 +107,7 @@ def run_pytorch_case(python_bin: str,
 def summarize_gpu_runs(payloads: list[dict]) -> dict:
     wall_ms = [float(payload["timing"]["wall_ms"]) for payload in payloads]
     gpu_ms = [float(payload["timing"]["gpu_ms"]) for payload in payloads]
+    wait_ms = [float(payload["timing"].get("wait_ms", 0.0)) for payload in payloads]
     command_buffer_count = [int(payload["timing"].get("command_buffer_count", 0)) for payload in payloads]
     encoder_count = [int(payload["timing"].get("encoder_count", 0)) for payload in payloads]
     generated_counts = [len(payload["generated_token_ids"]) for payload in payloads]
@@ -98,14 +116,16 @@ def summarize_gpu_runs(payloads: list[dict]) -> dict:
     for payload in payloads:
         for entry in payload["timing"].get("entries", []):
             label = str(entry["label"])
-            bucket = aggregated_entries.setdefault(label, {"gpu_ms": 0.0, "command_buffer_count": 0.0, "encoder_count": 0.0})
+            bucket = aggregated_entries.setdefault(label, {"gpu_ms": 0.0, "wait_ms": 0.0, "command_buffer_count": 0.0, "encoder_count": 0.0})
             bucket["gpu_ms"] += float(entry["gpu_ms"])
+            bucket["wait_ms"] += float(entry.get("wait_ms", 0.0))
             bucket["command_buffer_count"] += float(entry["command_buffer_count"])
             bucket["encoder_count"] += float(entry["encoder_count"])
     mean_entries = [
         {
             "label": label,
             "gpu_ms_avg": bucket["gpu_ms"] / max(len(payloads), 1),
+            "wait_ms_avg": bucket["wait_ms"] / max(len(payloads), 1),
             "command_buffer_count_avg": bucket["command_buffer_count"] / max(len(payloads), 1),
             "encoder_count_avg": bucket["encoder_count"] / max(len(payloads), 1),
         }
@@ -118,6 +138,7 @@ def summarize_gpu_runs(payloads: list[dict]) -> dict:
         "wall_ms_avg": statistics.mean(wall_ms),
         "wall_ms_min": min(wall_ms),
         "gpu_ms_avg": statistics.mean(gpu_ms),
+        "wait_ms_avg": statistics.mean(wait_ms),
         "command_buffer_count_avg": statistics.mean(command_buffer_count),
         "encoder_count_avg": statistics.mean(encoder_count),
         "total_tok_per_s_avg": statistics.mean(total_tok_s),
@@ -169,6 +190,7 @@ def write_report(report_path: Path,
         f"| C++ full GPU | wall_ms_avg | {gpu_summary['wall_ms_avg']:.2f} |",
         f"| C++ full GPU | wall_ms_min | {gpu_summary['wall_ms_min']:.2f} |",
         f"| C++ full GPU | gpu_ms_avg | {gpu_summary['gpu_ms_avg']:.2f} |",
+        f"| C++ full GPU | wait_ms_avg | {gpu_summary['wait_ms_avg']:.2f} |",
         f"| C++ full GPU | command_buffer_count_avg | {gpu_summary['command_buffer_count_avg']:.2f} |",
         f"| C++ full GPU | encoder_count_avg | {gpu_summary['encoder_count_avg']:.2f} |",
         f"| C++ full GPU | total_tok_per_s_avg | {gpu_summary['total_tok_per_s_avg']:.3f} |",
@@ -189,12 +211,12 @@ def write_report(report_path: Path,
         "",
         "## C++ GPU Timing Breakdown",
         "",
-        "| Label | gpu_ms_avg | command_buffer_count_avg | encoder_count_avg |",
-        "| --- | ---: | ---: | ---: |",
+        "| Label | gpu_ms_avg | wait_ms_avg | command_buffer_count_avg | encoder_count_avg |",
+        "| --- | ---: | ---: | ---: | ---: |",
     ]
     for entry in gpu_summary["timing_entries_avg"]:
         lines.append(
-            f"| {entry['label']} | {entry['gpu_ms_avg']:.2f} | {entry['command_buffer_count_avg']:.2f} | {entry['encoder_count_avg']:.2f} |"
+            f"| {entry['label']} | {entry['gpu_ms_avg']:.2f} | {entry['wait_ms_avg']:.2f} | {entry['command_buffer_count_avg']:.2f} | {entry['encoder_count_avg']:.2f} |"
         )
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -210,11 +232,18 @@ def main() -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path.parent.mkdir(parents=True, exist_ok=True)
+    gpu_env = parse_env_overrides(args.gpu_env)
 
     gpu_payloads: list[dict] = []
     for index in range(args.gpu_runs):
         gpu_output_path = output_dir / f"gpu_full_run_{index + 1}.json"
-        gpu_payloads.append(run_gpu_case(infer_bin, manifest, args.prompt, args.max_new_tokens, gpu_output_path))
+        gpu_payloads.append(run_gpu_case(infer_bin,
+                                         manifest,
+                                         args.prompt,
+                                         args.max_new_tokens,
+                                         gpu_output_path,
+                                         gpu_env,
+                                         args.gpu_timeout_seconds))
 
     pytorch_output_path = output_dir / "pytorch_mps.json"
     pytorch_payload = run_pytorch_case(args.python_bin,

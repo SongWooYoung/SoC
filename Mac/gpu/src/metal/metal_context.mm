@@ -5,6 +5,7 @@
 
 #include <mutex>
 #include <string_view>
+#include <chrono>
 #include <utility>
 
 namespace soc::gpu {
@@ -224,8 +225,11 @@ bool MetalContext::FinalizeCommandBuffer(const void* command_buffer_handle,
             return false;
         }
 
+        const auto wait_started = std::chrono::steady_clock::now();
         [command_buffer commit];
         [command_buffer waitUntilCompleted];
+        const double wait_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - wait_started).count();
 
         if (command_buffer.status == MTLCommandBufferStatusError) {
             if (error_message != nullptr) {
@@ -242,6 +246,7 @@ bool MetalContext::FinalizeCommandBuffer(const void* command_buffer_handle,
 
         std::lock_guard<std::mutex> lock(impl_->profiling_mutex);
         impl_->profiling_snapshot.gpu_ms += gpu_ms;
+        impl_->profiling_snapshot.wait_ms += wait_ms;
         impl_->profiling_snapshot.command_buffer_count += 1;
         impl_->profiling_snapshot.encoder_count += encoder_count;
         const std::string label = profile_label != nullptr && profile_label[0] != '\0'
@@ -249,9 +254,10 @@ bool MetalContext::FinalizeCommandBuffer(const void* command_buffer_handle,
             : error_prefix;
         MetalProfilingEntry* entry = FindProfilingEntry(&impl_->profiling_snapshot.entries, label);
         if (entry == nullptr) {
-            impl_->profiling_snapshot.entries.push_back(MetalProfilingEntry{label, gpu_ms, 1, encoder_count});
+            impl_->profiling_snapshot.entries.push_back(MetalProfilingEntry{label, gpu_ms, wait_ms, 1, encoder_count});
         } else {
             entry->gpu_ms += gpu_ms;
+            entry->wait_ms += wait_ms;
             entry->command_buffer_count += 1;
             entry->encoder_count += encoder_count;
         }

@@ -10,6 +10,7 @@ namespace soc::gpu {
 struct MetalProfilingEntry {
     std::string label;
     double gpu_ms = 0.0;
+    double wait_ms = 0.0;
     std::size_t command_buffer_count = 0;
     std::size_t encoder_count = 0;
 };
@@ -26,6 +27,7 @@ struct MetalDeviceInfo {
 
 struct MetalProfilingSnapshot {
     double gpu_ms = 0.0;
+    double wait_ms = 0.0;
     std::size_t command_buffer_count = 0;
     std::size_t encoder_count = 0;
     std::vector<MetalProfilingEntry> entries;

@@ -46,6 +46,7 @@ BASELINE_BENCH_BIN := $(BIN_DIR)/$(BASELINE_BENCH_TARGET)
 PHASE1_TEST_BIN := $(BIN_DIR)/$(PHASE1_TEST_TARGET)
 REAL_QWEN3_MANIFEST := $(abspath ../../models/cpp/qwen3-0.6b/manifest.json)
 REAL_QWEN3_F16_MANIFEST := $(abspath ../../models/cpp/qwen3-0.6b-f16/manifest.json)
+REAL_QWEN3_Q4_DECODE_MANIFEST := $(abspath ../../models/cpp/qwen3-0.6b-q4-decode/manifest.json)
 SWEEP_SCRIPT := tools/run_real_bundle_sweep.sh
 REAL_BUNDLE_REPORT := $(abspath $(REPORT_DIR)/test_real_bundle_regression_report.md)
 SWEEP_SUMMARY := $(abspath $(REPORT_DIR)/test_real_bundle_sweep_summary.md)
@@ -53,10 +54,20 @@ SWEEP_REPORT_DIR := $(abspath $(REPORT_DIR)/sweep_cases)
 QUICK_REAL_BUNDLE_REPORT := $(abspath $(QUICK_REPORT_DIR)/test_real_bundle_regression_report.md)
 QUICK_SWEEP_SUMMARY := $(abspath $(QUICK_REPORT_DIR)/test_real_bundle_sweep_summary.md)
 QUICK_SWEEP_REPORT_DIR := $(abspath $(QUICK_REPORT_DIR)/sweep_cases)
+DECODE_STEADY_OUTPUT_DIR := $(abspath $(REPORT_DIR)/decode_steady_state)
+DECODE_STEADY_REPORT := $(abspath $(REPORT_DIR)/decode_steady_state.md)
+DECODE_STEADY_Q4_OUTPUT_DIR := $(abspath $(REPORT_DIR)/decode_steady_state_q4_safe_batch)
+DECODE_STEADY_Q4_REPORT := $(abspath $(REPORT_DIR)/decode_steady_state_q4_safe_batch.md)
 LAYER_BENCH_OUTPUT_DIR := $(abspath $(REPORT_DIR)/layer_split_benchmark)
 LAYER_BENCH_REPORT := $(abspath $(REPORT_DIR)/layer_split_benchmark.md)
 FULL_GPU_VS_PYTORCH_OUTPUT_DIR := $(abspath $(REPORT_DIR)/full_gpu_vs_pytorch)
 FULL_GPU_VS_PYTORCH_REPORT := $(abspath $(REPORT_DIR)/full_gpu_vs_pytorch.md)
+FULL_GPU_VS_PYTORCH_Q4_OUTPUT_DIR := $(abspath $(REPORT_DIR)/full_gpu_vs_pytorch_q4_decode_safe_batch)
+FULL_GPU_VS_PYTORCH_Q4_REPORT := $(abspath $(REPORT_DIR)/full_gpu_vs_pytorch_q4_decode_safe_batch.md)
+FULL_GPU_VS_PYTORCH_Q4_BLOCKPREP_OUTPUT_DIR := $(abspath $(REPORT_DIR)/full_gpu_vs_pytorch_q4_decode_safe_blockprep)
+FULL_GPU_VS_PYTORCH_Q4_BLOCKPREP_REPORT := $(abspath $(REPORT_DIR)/full_gpu_vs_pytorch_q4_decode_safe_blockprep.md)
+DECODE_HANG_REPORT := $(abspath $(REPORT_DIR)/decode_hang_check_q4_decode_safe_batch.json)
+DECODE_HANG_BLOCKPREP_REPORT := $(abspath $(REPORT_DIR)/decode_hang_check_q4_decode_safe_blockprep.json)
 HF_QWEN3_MODEL_DIR := $(abspath ../../models/hf/qwen3-0.6b)
 LAYER_BENCH_PROMPT ?= Hello world
 LAYER_BENCH_MAX_NEW_TOKENS ?= 64
@@ -66,6 +77,8 @@ FULL_GPU_VS_PYTORCH_GPU_RUNS ?= 3
 FULL_GPU_VS_PYTORCH_PYTORCH_RUNS ?= 3
 FULL_GPU_VS_PYTORCH_PYTORCH_WARMUP ?= 1
 FULL_GPU_VS_PYTORCH_PYTORCH_DTYPE ?= float32
+DECODE_STEADY_MAX_NEW_TOKENS ?= 32
+DECODE_STEADY_RUNS ?= 3
 ACTIVE_REAL_BUNDLE_REPORT ?= $(REAL_BUNDLE_REPORT)
 ACTIVE_SWEEP_SUMMARY ?= $(SWEEP_SUMMARY)
 ACTIVE_SWEEP_REPORT_DIR ?= $(SWEEP_REPORT_DIR)
@@ -102,7 +115,7 @@ DEPFILES := $(CPP_OBJS:.o=.d) $(MM_OBJS:.o=.d) $(CPU_CPP_OBJS:.o=.d) $(MAIN_OBJ:
 
 DEPFILES += $(INFER_OBJ:.o=.d)
 
-.PHONY: all build-shaders build-main build-infer build-tests build-benchmarks bench-baseline check integration integration-real-bundle integration-real-bundle-f16 integration-sweep integration-sweep-quick run infer benchmark benchmark-layer-split benchmark-layer-split-f16 benchmark-full-gpu-vs-pytorch regression real-bundle-regression real-bundle-regression-quick clean
+.PHONY: all build-shaders build-main build-infer build-tests build-benchmarks bench-baseline check integration integration-real-bundle integration-real-bundle-f16 integration-sweep integration-sweep-quick run infer benchmark benchmark-layer-split benchmark-layer-split-f16 benchmark-full-gpu-vs-pytorch benchmark-full-gpu-vs-pytorch-q4-decode-safe-batch benchmark-full-gpu-vs-pytorch-q4-decode-safe-blockprep benchmark-decode-steady-state benchmark-decode-steady-state-q4-decode-safe-batch check-decode-hang-q4-decode-safe-batch check-decode-hang-q4-decode-safe-blockprep regression real-bundle-regression real-bundle-regression-quick clean
 
 all: build-main
 
@@ -216,6 +229,96 @@ benchmark-full-gpu-vs-pytorch: $(INFER_BIN)
 		--python-bin $(PYTHON_BIN) \
 		--pytorch-script ../benchmark_pytorch.py \
 		--pytorch-dtype $(FULL_GPU_VS_PYTORCH_PYTORCH_DTYPE)
+
+benchmark-full-gpu-vs-pytorch-q4-decode-safe-batch: $(INFER_BIN)
+	@test -f $(REAL_QWEN3_Q4_DECODE_MANIFEST) || (echo "missing q4 decode export bundle: $(REAL_QWEN3_Q4_DECODE_MANIFEST)" && exit 1)
+	@test -d $(HF_QWEN3_MODEL_DIR) || (echo "missing hf model dir: $(HF_QWEN3_MODEL_DIR)" && exit 1)
+	$(PYTHON_BIN) tools/benchmark_full_gpu_vs_pytorch.py \
+		--infer-bin $(INFER_BIN) \
+		--manifest $(REAL_QWEN3_Q4_DECODE_MANIFEST) \
+		--hf-model $(HF_QWEN3_MODEL_DIR) \
+		--output-dir $(FULL_GPU_VS_PYTORCH_Q4_OUTPUT_DIR) \
+		--report-path $(FULL_GPU_VS_PYTORCH_Q4_REPORT) \
+		--prompt "$(FULL_GPU_VS_PYTORCH_PROMPT)" \
+		--max-new-tokens $(FULL_GPU_VS_PYTORCH_MAX_NEW_TOKENS) \
+		--gpu-runs $(FULL_GPU_VS_PYTORCH_GPU_RUNS) \
+		--pytorch-runs $(FULL_GPU_VS_PYTORCH_PYTORCH_RUNS) \
+		--pytorch-warmup $(FULL_GPU_VS_PYTORCH_PYTORCH_WARMUP) \
+		--python-bin $(PYTHON_BIN) \
+		--pytorch-script ../benchmark_pytorch.py \
+		--pytorch-dtype $(FULL_GPU_VS_PYTORCH_PYTORCH_DTYPE) \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_Q4_DECODE=1 \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_SAFE_DECODE_BATCH=1
+
+benchmark-full-gpu-vs-pytorch-q4-decode-safe-blockprep: $(INFER_BIN)
+	@test -f $(REAL_QWEN3_Q4_DECODE_MANIFEST) || (echo "missing q4 decode export bundle: $(REAL_QWEN3_Q4_DECODE_MANIFEST)" && exit 1)
+	@test -d $(HF_QWEN3_MODEL_DIR) || (echo "missing hf model dir: $(HF_QWEN3_MODEL_DIR)" && exit 1)
+	$(PYTHON_BIN) tools/benchmark_full_gpu_vs_pytorch.py \
+		--infer-bin $(INFER_BIN) \
+		--manifest $(REAL_QWEN3_Q4_DECODE_MANIFEST) \
+		--hf-model $(HF_QWEN3_MODEL_DIR) \
+		--output-dir $(FULL_GPU_VS_PYTORCH_Q4_BLOCKPREP_OUTPUT_DIR) \
+		--report-path $(FULL_GPU_VS_PYTORCH_Q4_BLOCKPREP_REPORT) \
+		--prompt "$(FULL_GPU_VS_PYTORCH_PROMPT)" \
+		--max-new-tokens $(FULL_GPU_VS_PYTORCH_MAX_NEW_TOKENS) \
+		--gpu-runs $(FULL_GPU_VS_PYTORCH_GPU_RUNS) \
+		--pytorch-runs $(FULL_GPU_VS_PYTORCH_PYTORCH_RUNS) \
+		--pytorch-warmup $(FULL_GPU_VS_PYTORCH_PYTORCH_WARMUP) \
+		--python-bin $(PYTHON_BIN) \
+		--pytorch-script ../benchmark_pytorch.py \
+		--pytorch-dtype $(FULL_GPU_VS_PYTORCH_PYTORCH_DTYPE) \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_Q4_DECODE=1 \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_SAFE_DECODE_BATCH=1 \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_BLOCK_PREP_BATCH=1
+
+benchmark-decode-steady-state: $(INFER_BIN)
+	@test -f $(REAL_QWEN3_MANIFEST) || (echo "missing real export bundle: $(REAL_QWEN3_MANIFEST)" && exit 1)
+	$(PYTHON_BIN) tools/benchmark_decode_steady_state.py \
+		--infer-bin $(INFER_BIN) \
+		--manifest $(REAL_QWEN3_MANIFEST) \
+		--output-dir $(DECODE_STEADY_OUTPUT_DIR) \
+		--report-path $(DECODE_STEADY_REPORT) \
+		--prompt "$(FULL_GPU_VS_PYTORCH_PROMPT)" \
+		--max-new-tokens $(DECODE_STEADY_MAX_NEW_TOKENS) \
+		--runs $(DECODE_STEADY_RUNS)
+
+benchmark-decode-steady-state-q4-decode-safe-batch: $(INFER_BIN)
+	@test -f $(REAL_QWEN3_Q4_DECODE_MANIFEST) || (echo "missing q4 decode export bundle: $(REAL_QWEN3_Q4_DECODE_MANIFEST)" && exit 1)
+	$(PYTHON_BIN) tools/benchmark_decode_steady_state.py \
+		--infer-bin $(INFER_BIN) \
+		--manifest $(REAL_QWEN3_Q4_DECODE_MANIFEST) \
+		--output-dir $(DECODE_STEADY_Q4_OUTPUT_DIR) \
+		--report-path $(DECODE_STEADY_Q4_REPORT) \
+		--prompt "$(FULL_GPU_VS_PYTORCH_PROMPT)" \
+		--max-new-tokens $(DECODE_STEADY_MAX_NEW_TOKENS) \
+		--runs $(DECODE_STEADY_RUNS) \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_Q4_DECODE=1 \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_SAFE_DECODE_BATCH=1
+
+check-decode-hang-q4-decode-safe-batch: $(INFER_BIN)
+	@test -f $(REAL_QWEN3_Q4_DECODE_MANIFEST) || (echo "missing q4 decode export bundle: $(REAL_QWEN3_Q4_DECODE_MANIFEST)" && exit 1)
+	$(PYTHON_BIN) tools/check_decode_hang.py \
+		--infer-bin $(INFER_BIN) \
+		--manifest $(REAL_QWEN3_Q4_DECODE_MANIFEST) \
+		--prompt "$(FULL_GPU_VS_PYTORCH_PROMPT)" \
+		--max-new-tokens 8 \
+		--timeout-seconds 30 \
+		--output $(DECODE_HANG_REPORT) \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_Q4_DECODE=1 \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_SAFE_DECODE_BATCH=1
+
+check-decode-hang-q4-decode-safe-blockprep: $(INFER_BIN)
+	@test -f $(REAL_QWEN3_Q4_DECODE_MANIFEST) || (echo "missing q4 decode export bundle: $(REAL_QWEN3_Q4_DECODE_MANIFEST)" && exit 1)
+	$(PYTHON_BIN) tools/check_decode_hang.py \
+		--infer-bin $(INFER_BIN) \
+		--manifest $(REAL_QWEN3_Q4_DECODE_MANIFEST) \
+		--prompt "$(FULL_GPU_VS_PYTORCH_PROMPT)" \
+		--max-new-tokens 8 \
+		--timeout-seconds 30 \
+		--output $(DECODE_HANG_BLOCKPREP_REPORT) \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_Q4_DECODE=1 \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_SAFE_DECODE_BATCH=1 \
+		--gpu-env SOC_GPU_ENABLE_EXPERIMENTAL_BLOCK_PREP_BATCH=1
 
 regression:
 	$(MAKE) clean

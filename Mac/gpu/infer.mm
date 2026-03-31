@@ -414,6 +414,7 @@ std::string JsonProfilingEntries(const soc::gpu::MetalProfilingSnapshot& snapsho
         stream << "{"
                << "\"label\":\"" << JsonEscape(entry.label) << "\", "
                << "\"gpu_ms\":" << entry.gpu_ms << ", "
+               << "\"wait_ms\":" << entry.wait_ms << ", "
                << "\"command_buffer_count\":" << entry.command_buffer_count << ", "
                << "\"encoder_count\":" << entry.encoder_count
                << "}";
@@ -660,6 +661,7 @@ std::string BuildPrimaryOutput(const CliOptions& options,
     stream << "  \"timing\": {\n";
     stream << "    \"wall_ms\": " << wall_ms << ",\n";
     stream << "    \"gpu_ms\": " << gpu_ms << ",\n";
+    stream << "    \"wait_ms\": " << profile.wait_ms << ",\n";
     stream << "    \"command_buffer_count\": " << profile.command_buffer_count << ",\n";
     stream << "    \"encoder_count\": " << profile.encoder_count << ",\n";
     stream << "    \"entries\": " << JsonProfilingEntries(profile) << "\n";
@@ -719,10 +721,12 @@ void PrintVerboseSummary(const CliOptions& options,
     PrintTokenIds(std::cerr, "generated_token_ids", generated_token_ids);
     std::cerr << "wall_ms=" << wall_ms << "\n";
     std::cerr << "gpu_ms=" << gpu_ms << "\n";
+    std::cerr << "wait_ms=" << profile.wait_ms << "\n";
     std::cerr << "command_buffer_count=" << profile.command_buffer_count << "\n";
     std::cerr << "encoder_count=" << profile.encoder_count << "\n";
     for (const auto& entry : profile.entries) {
         std::cerr << "profile[" << entry.label << "] gpu_ms=" << entry.gpu_ms
+                  << " wait_ms=" << entry.wait_ms
                   << " command_buffers=" << entry.command_buffer_count
                   << " encoders=" << entry.encoder_count << "\n";
     }

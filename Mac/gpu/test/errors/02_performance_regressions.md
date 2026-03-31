@@ -238,6 +238,37 @@
 
 - `Mac/gpu/src/op/matmul_op.mm`
 - `Mac/gpu/shaders/gpu_kernels.metal`
+
+## 10. Prebuilt Decode Layer-Stream Replay
+
+상태: `rejected as default`, `unsafe experimental`
+
+관찰:
+
+1. `real buffer-range hazard tracker`와 stage-local scratch arena를 붙인 뒤, `SOC_GPU_ENABLE_EXPERIMENTAL_PREBUILT_DECODE_LAYER_STREAM=1`으로 decode stage를 외부 `CommandStream`에 replay하는 실험을 했다.
+2. `REAL_BUNDLE_MAX_NEW_TOKENS=1` smoke는 통과했다.
+3. 하지만 `gpu_infer --max-new-tokens 8`는 30초 timeout으로 멈췄고, 실기기에서는 다시 `WindowServer` 문제가 관찰됐다.
+4. 즉 single-step smoke success가 multi-token decode safety를 보장하지 않았다.
+
+원인 가설:
+
+1. `buffer id + byte range` tracking 자체는 진단용 infrastructure로 유효하다.
+2. 실제 회귀를 만든 건 `RunBlockRange`에 외부 `CommandStream`을 주입해 layer-scope replay를 다시 도입한 점이다.
+3. 이것은 과거 `SOC_GPU_ENABLE_EXPERIMENTAL_COMMAND_STREAM=layer` 회귀와 본질적으로 같은 방향이다.
+4. 다시 말해 방법론의 문제라기보다, "prebuilt plan을 layer-scope command buffer replay로 쓰는 방식"이 M4 실기기에서 unsafe했다.
+
+교훈:
+
+1. 앞으로 prebuilt graph/plan 최적화는 layer replay가 아니라, 이미 안전성이 확인된 sublayer batch boundary만 대상으로 삼아야 한다.
+2. smoke test는 필요조건일 뿐이고, 최소 8-token 이상 decode timeout/hang check가 같이 있어야 한다.
+3. `real hazard tracker`와 `plan cache key` 확장은 유지할 가치가 있지만, layer-stream 실행 경로는 기본 비활성화 상태를 유지한다.
+
+관련 파일:
+
+- `Mac/gpu/src/runtime/command_scheduler.cpp`
+- `Mac/gpu/src/model/qwen_causal_lm.cpp`
+- `Mac/gpu/include/runtime/command_scheduler.h`
+- `Mac/gpu/test/errors/01_windowserver_gpu_fault.md`
 - `Mac/gpu/build/reports/quick/labeled_breakdown_lmhead_gateup.json`
 
 ## 10. Decode `Gate/Up` Fused Projection Kernel

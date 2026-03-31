@@ -31,6 +31,16 @@ bool UseExperimentalSafeDecodeBatch() {
     return value != nullptr && std::string(value) == "1";
 }
 
+bool UseExperimentalBlockPrepBatch() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_BLOCK_PREP_BATCH");
+    return value != nullptr && std::string(value) == "1";
+}
+
+bool UseExperimentalAttentionFullBatch() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_ATTENTION_FULL_BATCH");
+    return value != nullptr && std::string(value) == "1";
+}
+
 struct MetalAttentionScoreParams {
     std::uint32_t query_row_count;
     std::uint32_t key_row_count;
@@ -569,7 +579,11 @@ bool RunAttentionInternal(const MetalContext& context,
     BufferArenaMarkGuard arena_mark(temporary_arena, "QwenAttention");
     CommandStream local_stream;
     CommandStream* active_stream = stream;
-    const bool use_local_decode_batch = decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch();
+    const bool use_attention_full_batch =
+        decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch() && UseExperimentalAttentionFullBatch();
+    const bool use_local_decode_batch =
+        decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch() && !use_attention_full_batch;
+    const bool use_external_decode_prep_stream = decode_mode && stream != nullptr && UseExperimentalBlockPrepBatch();
 
     const std::size_t rotary_dim = params.rotary_dim == 0 ? params.head_dim : params.rotary_dim;
     const TensorDesc query_desc = TensorDesc::CreateContiguous(DataType::kFloat32, {row_count, query_hidden_size});
@@ -595,7 +609,7 @@ bool RunAttentionInternal(const MetalContext& context,
         return false;
     }
 
-    if (use_local_decode_batch) {
+    if (use_attention_full_batch || use_local_decode_batch) {
         if (!local_stream.Begin(context, error_message)) {
             return false;
         }
@@ -789,6 +803,18 @@ bool RunAttentionInternal(const MetalContext& context,
             return false;
         }
         active_stream = nullptr;
+    } else if (use_external_decode_prep_stream) {
+        if (!stream->Flush(context, "DecodeBlockPrepBatch", error_message)) {
+            return false;
+        }
+        active_stream = nullptr;
+    }
+
+    if (decode_mode && (use_local_decode_batch || use_external_decode_prep_stream)) {
+        if (!local_stream.Begin(context, error_message)) {
+            return false;
+        }
+        active_stream = &local_stream;
     }
 
     std::size_t sequence_length_before_append = 0;
@@ -830,12 +856,6 @@ bool RunAttentionInternal(const MetalContext& context,
     score_params.query_position_base = static_cast<std::uint32_t>(sequence_length_before_append);
     score_params.causal_mask = 1;
     score_params.scale = 1.0f / std::sqrt(static_cast<float>(params.head_dim));
-    if (use_local_decode_batch) {
-        if (!local_stream.Begin(context, error_message)) {
-            return false;
-        }
-        active_stream = &local_stream;
-    }
     if (!DispatchAttentionScores(context,
                                  pipeline_cache,
                                  query_rope,
@@ -923,7 +943,11 @@ bool RunAttentionInternal(const MetalContext& context,
         }
     }
 
-    if (use_local_decode_batch) {
+    if (use_attention_full_batch) {
+        if (!local_stream.Flush(context, "DecodeAttentionFullBatch", error_message)) {
+            return false;
+        }
+    } else if (use_local_decode_batch || use_external_decode_prep_stream) {
         if (!local_stream.Flush(context, "DecodeAttnContextBatch", error_message)) {
             return false;
         }

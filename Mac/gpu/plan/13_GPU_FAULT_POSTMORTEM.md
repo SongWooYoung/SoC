@@ -85,6 +85,13 @@ Mac mini M4 32GB에서 `WindowServer` 오류창과 화면 깨짐을 동반한 GP
 - 즉 다음 scheduler 실험의 목표는 "더 큰 giant buffer"가 아니라 "엄격히 제한된 scope에서 submit/encode/wait overhead를 줄이는 것"이어야 한다.
 - 앞으로 scheduler 실험은 `encoder cap`, `flush reason`, `scope boundary`를 같이 기록한다.
 
+같은 날 추가로 확인된 사실:
+
+- `real buffer-range hazard tracker`와 stage-local scratch arena를 도입한 것만으로는 fault가 재현되지 않았다.
+- 하지만 그 위에 `SOC_GPU_ENABLE_EXPERIMENTAL_PREBUILT_DECODE_LAYER_STREAM=1`을 얹어 `QwenCausalLM` decode stage를 외부 `CommandStream`으로 replay하면, `REAL_BUNDLE_MAX_NEW_TOKENS=1` smoke는 통과해도 `gpu_infer --max-new-tokens 8`에서 timeout/hang이 재현됐다.
+- 사용자가 같은 시점에 다시 `WindowServer` 문제를 관찰했으므로, 이 경로는 `unsafe pattern`으로 재분류한다.
+- 따라서 "prebuilt graph/plan" 자체를 포기하는 것이 아니라, `layer-scope replay`를 금지하고 `safe sublayer batching only`를 다음 조건으로 삼는다.
+
 ## Method Rules Going Forward
 
 앞으로는 다음 규칙을 지킨다.
@@ -95,6 +102,7 @@ Mac mini M4 32GB에서 `WindowServer` 오류창과 화면 깨짐을 동반한 GP
 4. 새 최적화는 한 번에 하나씩만 올린다.
 5. `build/test` 통과만으로 GPU 경로를 기본값으로 승격하지 않는다. 실기기 benchmark와 fault check가 필요하다.
 6. 새 scheduler는 `full-range`가 아니라 `bounded`여야 하며, attention + KV blit + 다수 layer를 한 command buffer에 무제한으로 섞지 않는다.
+7. `prebuilt decode plan` 실험은 `layer replay`를 기본값으로 사용하지 않는다. `real buffer-range` tracking은 유지 가능하지만, 실행 scope는 이미 실기기에서 안전성이 확인된 sublayer batch 경계로 제한한다.
 
 ## References
 

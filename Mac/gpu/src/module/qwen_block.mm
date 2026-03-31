@@ -32,6 +32,16 @@ bool UseExperimentalSafeDecodeBatch() {
     return value != nullptr && std::string(value) == "1";
 }
 
+bool UseExperimentalBlockPrepBatch() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_BLOCK_PREP_BATCH");
+    return value != nullptr && std::string(value) == "1";
+}
+
+bool UseExperimentalAttentionFullBatch() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_ATTENTION_FULL_BATCH");
+    return value != nullptr && std::string(value) == "1";
+}
+
 }  // namespace
 
 namespace {
@@ -71,6 +81,17 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
     }
 
     soc::gpu::BufferArenaMarkGuard arena_mark(temporary_arena, decode_mode ? "QwenBlockDecode" : "QwenBlock");
+    soc::gpu::CommandStream prep_stream;
+    soc::gpu::CommandStream* attention_stream = stream;
+    const bool use_block_prep_batch =
+        decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch() &&
+        UseExperimentalBlockPrepBatch() && !UseExperimentalAttentionFullBatch();
+    if (use_block_prep_batch) {
+        if (!prep_stream.Begin(context, error_message)) {
+            return false;
+        }
+        attention_stream = &prep_stream;
+    }
 
     const auto& input_shape = input.GetDesc().GetShape();
     const soc::gpu::TensorDesc hidden_desc = soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, input_shape);
@@ -94,7 +115,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                   input_norm,
                                   input_norm_params,
                                   temporary_arena,
-                                  stream,
+                                  attention_stream,
                                   error_message)) {
         return false;
     }
@@ -113,7 +134,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                              attention_output,
                                              attention_params,
                                              temporary_arena,
-                                             stream,
+                                             attention_stream,
                                              error_message)
         : soc::gpu::QwenAttention::RunPrefill(context,
                                               pipeline_cache,
@@ -125,7 +146,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                               attention_output,
                                               attention_params,
                                               temporary_arena,
-                                              stream,
+                                              attention_stream,
                                               error_message);
     if (!attention_ok) {
         return false;
