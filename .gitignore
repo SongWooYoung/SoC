@@ -23,4 +23,5 @@ main
 
 models/
 
-/.venv
+.venv/
+**/.venv/
