@@ -27,6 +27,12 @@ struct QwenMlpParams {
     bool add_residual = false;
 };
 
+struct QwenMlpScratch {
+    DeviceTensor gate_tensor;
+    DeviceTensor up_tensor;
+    DeviceTensor fused_tensor;
+};
+
 class QwenMLP {
 public:
     static bool Run(const MetalContext& context,
@@ -37,6 +43,7 @@ public:
                     const DeviceTensor& output,
                     const QwenMlpParams& params,
                     BufferArena* temporary_arena,
+                    const QwenMlpScratch* scratch,
                     CommandStream* stream,
                     std::string* error_message);
 };

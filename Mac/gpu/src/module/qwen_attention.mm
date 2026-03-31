@@ -581,6 +581,8 @@ bool RunAttentionInternal(const MetalContext& context,
     CommandStream* active_stream = stream;
     const bool use_attention_full_batch =
         decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch() && UseExperimentalAttentionFullBatch();
+    const bool use_caller_attention_full_batch =
+        decode_mode && stream != nullptr && UseExperimentalSafeDecodeBatch() && UseExperimentalAttentionFullBatch();
     const bool use_local_decode_batch =
         decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch() && !use_attention_full_batch;
     const bool use_external_decode_prep_stream = decode_mode && stream != nullptr && UseExperimentalBlockPrepBatch();
@@ -614,6 +616,8 @@ bool RunAttentionInternal(const MetalContext& context,
             return false;
         }
         active_stream = &local_stream;
+    } else if (use_caller_attention_full_batch) {
+        active_stream = stream;
     }
 
     if (decode_mode) {
@@ -947,6 +951,8 @@ bool RunAttentionInternal(const MetalContext& context,
         if (!local_stream.Flush(context, "DecodeAttentionFullBatch", error_message)) {
             return false;
         }
+    } else if (use_caller_attention_full_batch) {
+        return true;
     } else if (use_local_decode_batch || use_external_decode_prep_stream) {
         if (!local_stream.Flush(context, "DecodeAttnContextBatch", error_message)) {
             return false;

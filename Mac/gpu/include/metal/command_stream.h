@@ -64,6 +64,7 @@ public:
     /// Commit the command buffer, wait for GPU completion, and accumulate profiling.
     /// After Flush(), the stream can be reused by calling Begin() again.
     bool Flush(const MetalContext& context, const char* profile_label, std::string* error_message);
+    bool FlushDeferred(const MetalContext& context, const char* profile_label, std::string* error_message);
 
     /// Returns true if Begin() has been called and Flush() has not yet been called.
     bool IsActive() const;

@@ -1,8 +1,10 @@
 #include "module/qwen_block.h"
 
 #include <cstdlib>
+#include <mutex>
 
 #include "buffer/buffer_arena.h"
+#include "buffer/metal_buffer.h"
 #include "metal/command_stream.h"
 #include "op/rms_norm_op.h"
 
@@ -40,6 +42,70 @@ bool UseExperimentalBlockPrepBatch() {
 bool UseExperimentalAttentionFullBatch() {
     const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_ATTENTION_FULL_BATCH");
     return value != nullptr && std::string(value) == "1";
+}
+
+bool UseExperimentalBlockAttentionBatch() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_BLOCK_ATTENTION_BATCH");
+    return value != nullptr && std::string(value) == "1";
+}
+
+bool UseExperimentalDeferredMlpWait() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_DEFERRED_MLP_WAIT");
+    return value != nullptr && std::string(value) == "1";
+}
+
+struct DecodeBlockScratch {
+    std::shared_ptr<MetalBuffer> attention_output_buffer;
+    std::shared_ptr<MetalBuffer> post_attention_norm_buffer;
+    std::shared_ptr<MetalBuffer> gate_buffer;
+    std::shared_ptr<MetalBuffer> up_buffer;
+    std::shared_ptr<MetalBuffer> fused_buffer;
+};
+
+bool EnsureScratchBuffer(const MetalContext& context,
+                         std::shared_ptr<MetalBuffer>* buffer,
+                         std::size_t size_bytes,
+                         const std::string& label,
+                         std::string* error_message) {
+    if (*buffer != nullptr && (*buffer)->GetSizeBytes() >= size_bytes) {
+        return true;
+    }
+    *buffer = MetalBuffer::CreatePrivate(context, size_bytes, label, error_message);
+    return *buffer != nullptr;
+}
+
+bool AcquireDecodeBlockScratch(const MetalContext& context,
+                               std::size_t layer_index,
+                               std::size_t hidden_size,
+                               std::size_t intermediate_size,
+                               DecodeBlockScratch* scratch,
+                               std::string* error_message) {
+    static std::mutex scratch_mutex;
+    static std::vector<DecodeBlockScratch> scratch_by_layer;
+
+    if (scratch == nullptr) {
+        if (error_message != nullptr) {
+            *error_message = "Decode block scratch output must not be null";
+        }
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(scratch_mutex);
+    if (scratch_by_layer.size() <= layer_index) {
+        scratch_by_layer.resize(layer_index + 1);
+    }
+    DecodeBlockScratch& slot = scratch_by_layer[layer_index];
+    const std::size_t hidden_bytes = hidden_size * sizeof(float);
+    const std::size_t intermediate_bytes = intermediate_size * sizeof(float);
+    if (!EnsureScratchBuffer(context, &slot.attention_output_buffer, hidden_bytes, "decode_attention_output_" + std::to_string(layer_index), error_message) ||
+        !EnsureScratchBuffer(context, &slot.post_attention_norm_buffer, hidden_bytes, "decode_post_attention_norm_" + std::to_string(layer_index), error_message) ||
+        !EnsureScratchBuffer(context, &slot.gate_buffer, intermediate_bytes, "decode_gate_" + std::to_string(layer_index), error_message) ||
+        !EnsureScratchBuffer(context, &slot.up_buffer, intermediate_bytes, "decode_up_" + std::to_string(layer_index), error_message) ||
+        !EnsureScratchBuffer(context, &slot.fused_buffer, intermediate_bytes, "decode_fused_" + std::to_string(layer_index), error_message)) {
+        return false;
+    }
+    *scratch = slot;
+    return true;
 }
 
 }  // namespace
@@ -83,10 +149,20 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
     soc::gpu::BufferArenaMarkGuard arena_mark(temporary_arena, decode_mode ? "QwenBlockDecode" : "QwenBlock");
     soc::gpu::CommandStream prep_stream;
     soc::gpu::CommandStream* attention_stream = stream;
+    const bool use_deferred_mlp_wait =
+        decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch() && UseExperimentalDeferredMlpWait();
+    const bool use_block_attention_batch =
+        decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch() &&
+        UseExperimentalAttentionFullBatch() && UseExperimentalBlockAttentionBatch();
     const bool use_block_prep_batch =
         decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch() &&
-        UseExperimentalBlockPrepBatch() && !UseExperimentalAttentionFullBatch();
+        UseExperimentalBlockPrepBatch() && !UseExperimentalAttentionFullBatch() && !use_block_attention_batch;
     if (use_block_prep_batch) {
+        if (!prep_stream.Begin(context, error_message)) {
+            return false;
+        }
+        attention_stream = &prep_stream;
+    } else if (use_block_attention_batch) {
         if (!prep_stream.Begin(context, error_message)) {
             return false;
         }
@@ -98,10 +174,28 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
     soc::gpu::DeviceTensor input_norm;
     soc::gpu::DeviceTensor attention_output;
     soc::gpu::DeviceTensor post_attention_norm;
-    if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &input_norm, error_message) ||
-        !AllocateTemporaryTensor(temporary_arena, hidden_desc, &attention_output, error_message) ||
-        !AllocateTemporaryTensor(temporary_arena, hidden_desc, &post_attention_norm, error_message)) {
+    DecodeBlockScratch decode_scratch;
+    const bool use_persistent_decode_scratch =
+        use_deferred_mlp_wait && AcquireDecodeBlockScratch(context,
+                                                           layer_index,
+                                                           input_shape[1],
+                                                           params.mlp.intermediate_size,
+                                                           &decode_scratch,
+                                                           error_message);
+    if (use_deferred_mlp_wait && !use_persistent_decode_scratch) {
         return false;
+    }
+    if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &input_norm, error_message)) {
+        return false;
+    }
+    if (use_persistent_decode_scratch) {
+        attention_output = soc::gpu::DeviceTensor(decode_scratch.attention_output_buffer, 0, hidden_desc);
+        post_attention_norm = soc::gpu::DeviceTensor(decode_scratch.post_attention_norm_buffer, 0, hidden_desc);
+    } else {
+        if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &attention_output, error_message) ||
+            !AllocateTemporaryTensor(temporary_arena, hidden_desc, &post_attention_norm, error_message)) {
+            return false;
+        }
     }
 
     soc::gpu::RmsNormParams input_norm_params;
@@ -152,6 +246,13 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
         return false;
     }
 
+    if (use_block_attention_batch) {
+        if (!prep_stream.Flush(context, "DecodeBlockAttentionBatch", error_message)) {
+            return false;
+        }
+        attention_stream = nullptr;
+    }
+
     CommandStream local_stream;
     CommandStream* active_stream = stream;
     const bool use_local_decode_batch = decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch();
@@ -172,7 +273,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                   weights.post_attention_layernorm_weight,
                                   post_attention_norm,
                                   post_norm_params,
-                                  temporary_arena,
+                                  use_persistent_decode_scratch ? nullptr : temporary_arena,
                                   active_stream,
                                   error_message)) {
         return false;
@@ -180,6 +281,16 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
 
     soc::gpu::QwenMlpParams mlp_params = params.mlp;
     mlp_params.add_residual = true;
+    soc::gpu::QwenMlpScratch mlp_scratch;
+    const soc::gpu::QwenMlpScratch* mlp_scratch_ptr = nullptr;
+    if (use_persistent_decode_scratch) {
+        const soc::gpu::TensorDesc intermediate_desc =
+            soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, {input_shape[0], params.mlp.intermediate_size});
+        mlp_scratch.gate_tensor = soc::gpu::DeviceTensor(decode_scratch.gate_buffer, 0, intermediate_desc);
+        mlp_scratch.up_tensor = soc::gpu::DeviceTensor(decode_scratch.up_buffer, 0, intermediate_desc);
+        mlp_scratch.fused_tensor = soc::gpu::DeviceTensor(decode_scratch.fused_buffer, 0, intermediate_desc);
+        mlp_scratch_ptr = &mlp_scratch;
+    }
     if (!soc::gpu::QwenMLP::Run(context,
                                 pipeline_cache,
                                 post_attention_norm,
@@ -187,14 +298,19 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                 weights.mlp,
                                 output,
                                 mlp_params,
-                                temporary_arena,
+                                use_persistent_decode_scratch ? nullptr : temporary_arena,
+                                mlp_scratch_ptr,
                                 active_stream,
                                 error_message)) {
         return false;
     }
 
     if (use_local_decode_batch) {
-        if (!local_stream.Flush(context, "DecodePostNormMlpBatch", error_message)) {
+        if (use_persistent_decode_scratch) {
+            if (!local_stream.FlushDeferred(context, "DecodePostNormMlpBatch", error_message)) {
+                return false;
+            }
+        } else if (!local_stream.Flush(context, "DecodePostNormMlpBatch", error_message)) {
             return false;
         }
     }

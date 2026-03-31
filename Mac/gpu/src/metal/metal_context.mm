@@ -94,6 +94,13 @@ MetalProfilingEntry* FindProfilingEntry(std::vector<MetalProfilingEntry>* entrie
 }  // namespace
 
 struct MetalContext::Impl {
+    struct PendingCommandBuffer {
+        void* command_buffer = nullptr;
+        std::string error_prefix;
+        std::string profile_label;
+        std::size_t encoder_count = 0;
+    };
+
     id<MTLDevice> device = nil;
     id<MTLCommandQueue> command_queue = nil;
     id<MTLLibrary> library = nil;
@@ -101,6 +108,7 @@ struct MetalContext::Impl {
     MetalDeviceInfo device_info;
     mutable std::mutex profiling_mutex;
     mutable MetalProfilingSnapshot profiling_snapshot;
+    mutable std::vector<PendingCommandBuffer> pending_command_buffers;
 };
 
 std::unique_ptr<MetalContext> MetalContext::CreateDefault(const std::string& metallib_path,
@@ -263,6 +271,80 @@ bool MetalContext::FinalizeCommandBuffer(const void* command_buffer_handle,
         }
         return true;
     }
+}
+
+bool MetalContext::CommitCommandBufferDeferred(const void* command_buffer_handle,
+                                               const std::string& error_prefix,
+                                               const char* profile_label,
+                                               std::size_t encoder_count,
+                                               std::string* error_message) const {
+    @autoreleasepool {
+        id<MTLCommandBuffer> command_buffer = (__bridge id<MTLCommandBuffer>)command_buffer_handle;
+        if (command_buffer == nil) {
+            if (error_message != nullptr) {
+                *error_message = error_prefix + ": command buffer handle was null";
+            }
+            return false;
+        }
+        [command_buffer commit];
+        std::lock_guard<std::mutex> lock(impl_->profiling_mutex);
+        impl_->pending_command_buffers.push_back(
+            Impl::PendingCommandBuffer{(__bridge_retained void*)command_buffer,
+                                       error_prefix,
+                                       profile_label != nullptr && profile_label[0] != '\0' ? std::string(profile_label)
+                                                                                            : error_prefix,
+                                       encoder_count});
+        return true;
+    }
+}
+
+bool MetalContext::DrainPendingCommandBuffers(std::string* error_message) const {
+    std::vector<Impl::PendingCommandBuffer> pending;
+    {
+        std::lock_guard<std::mutex> lock(impl_->profiling_mutex);
+        pending.swap(impl_->pending_command_buffers);
+    }
+
+    for (auto& pending_cb : pending) {
+        @autoreleasepool {
+            id<MTLCommandBuffer> command_buffer = (__bridge_transfer id<MTLCommandBuffer>)pending_cb.command_buffer;
+            pending_cb.command_buffer = nullptr;
+            const auto wait_started = std::chrono::steady_clock::now();
+            [command_buffer waitUntilCompleted];
+            const double wait_ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - wait_started).count();
+
+            if (command_buffer.status == MTLCommandBufferStatusError) {
+                if (error_message != nullptr) {
+                    NSString* prefix = [NSString stringWithUTF8String:pending_cb.error_prefix.c_str()];
+                    *error_message = BuildErrorMessage(prefix, command_buffer.error);
+                }
+                return false;
+            }
+
+            double gpu_ms = 0.0;
+            if (command_buffer.GPUStartTime > 0.0 && command_buffer.GPUEndTime >= command_buffer.GPUStartTime) {
+                gpu_ms = (command_buffer.GPUEndTime - command_buffer.GPUStartTime) * 1000.0;
+            }
+
+            std::lock_guard<std::mutex> lock(impl_->profiling_mutex);
+            impl_->profiling_snapshot.gpu_ms += gpu_ms;
+            impl_->profiling_snapshot.wait_ms += wait_ms;
+            impl_->profiling_snapshot.command_buffer_count += 1;
+            impl_->profiling_snapshot.encoder_count += pending_cb.encoder_count;
+            MetalProfilingEntry* entry = FindProfilingEntry(&impl_->profiling_snapshot.entries, pending_cb.profile_label);
+            if (entry == nullptr) {
+                impl_->profiling_snapshot.entries.push_back(
+                    MetalProfilingEntry{pending_cb.profile_label, gpu_ms, wait_ms, 1, pending_cb.encoder_count});
+            } else {
+                entry->gpu_ms += gpu_ms;
+                entry->wait_ms += wait_ms;
+                entry->command_buffer_count += 1;
+                entry->encoder_count += pending_cb.encoder_count;
+            }
+        }
+    }
+    return true;
 }
 
 bool MetalContext::RunBootstrapKernel(std::uint32_t input_value,

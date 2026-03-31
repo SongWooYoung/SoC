@@ -100,6 +100,14 @@ struct AffineQmmParams {
 	uint padding;
 };
 
+inline float4 unpack_nibbles4(uint packed, uint shift_base, float scale, float bias) {
+	const float4 nibble_values = float4(float((packed >> shift_base) & 0xFu),
+	                                   float((packed >> (shift_base + 4)) & 0xFu),
+	                                   float((packed >> (shift_base + 8)) & 0xFu),
+	                                   float((packed >> (shift_base + 12)) & 0xFu));
+	return nibble_values * scale + bias;
+}
+
 kernel void rms_norm_f32_rowwise(const device float* input_values [[buffer(0)]],
 								 const device float* weight_values [[buffer(1)]],
 								 device float* output_values [[buffer(2)]],
@@ -294,9 +302,11 @@ kernel void affine_qmm_t_4bit(const device float* lhs_values [[buffer(0)]],
 		return;
 	}
 
-	threadgroup float lhs_tile[4096];
-	for (uint index = tid; index < params.inner_dim; index += 32) {
-		lhs_tile[index] = lhs_values[row_index * params.inner_dim + index];
+	threadgroup float4 lhs_tile[1024];
+	const uint lhs_vec_count = params.inner_dim / 4;
+	for (uint index = tid; index < lhs_vec_count; index += 32) {
+		const uint lhs_offset = row_index * params.inner_dim + index * 4;
+		lhs_tile[index] = *reinterpret_cast<const device float4*>(lhs_values + lhs_offset);
 	}
 	threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -309,11 +319,13 @@ kernel void affine_qmm_t_4bit(const device float* lhs_values [[buffer(0)]],
 		const uint x_base = group_index * params.group_size;
 		for (uint packed_index = 0; packed_index < packed_per_group; ++packed_index) {
 			const uint packed = qweight_values[col_index * params.packed_inner_dim + packed_base + packed_index];
-			const uint lhs_base = x_base + packed_index * 8;
-			for (uint nibble_index = 0; nibble_index < 8; ++nibble_index) {
-				const uint nibble = (packed >> (nibble_index * 4)) & 0xFu;
-				accumulator += (float(nibble) * scale + bias) * lhs_tile[lhs_base + nibble_index];
-			}
+			const uint lhs_base = (x_base + packed_index * 8) / 4;
+			const float4 lhs0 = lhs_tile[lhs_base];
+			const float4 lhs1 = lhs_tile[lhs_base + 1];
+			const float4 q0 = unpack_nibbles4(packed, 0, scale, bias);
+			const float4 q1 = unpack_nibbles4(packed, 16, scale, bias);
+			accumulator += dot(lhs0, q0);
+			accumulator += dot(lhs1, q1);
 		}
 	}
 
@@ -324,6 +336,129 @@ kernel void affine_qmm_t_4bit(const device float* lhs_values [[buffer(0)]],
 		accumulator = accumulator / (1.0f + exp(-accumulator));
 	}
 	output_values[row_index * params.output_row_stride + col_index] = accumulator;
+}
+
+kernel void affine_qmm_t_4bit_mlp2(const device float* lhs_values [[buffer(0)]],
+				   const device uint* qweight_values [[buffer(1)]],
+				   const device float* scale_values [[buffer(2)]],
+				   const device float* qbias_values [[buffer(3)]],
+				   const device float* residual_values [[buffer(4)]],
+				   device float* output_values [[buffer(5)]],
+				   constant AffineQmmParams& params [[buffer(6)]],
+				   uint tid [[thread_index_in_threadgroup]],
+				   uint2 tgid [[threadgroup_position_in_grid]]) {
+	if (params.bits != 4 || params.group_size == 0) {
+		return;
+	}
+	constexpr uint kOutputsPerThread = 2;
+	const uint row_index = tgid.y;
+	const uint col_base = tgid.x * 32 + tid * kOutputsPerThread;
+	if (row_index >= params.row_count) {
+		return;
+	}
+
+	threadgroup float4 lhs_tile[1024];
+	const uint lhs_vec_count = params.inner_dim / 4;
+	for (uint index = tid; index < lhs_vec_count; index += 16) {
+		const uint lhs_offset = row_index * params.inner_dim + index * 4;
+		lhs_tile[index] = *reinterpret_cast<const device float4*>(lhs_values + lhs_offset);
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+
+	float2 accumulators = float2(0.0f);
+	const uint packed_per_group = params.group_size / 8;
+	for (uint group_index = 0; group_index < params.groups_per_row; ++group_index) {
+		const uint packed_base = group_index * packed_per_group;
+		const uint x_base = (group_index * params.group_size) / 4;
+		for (uint packed_index = 0; packed_index < packed_per_group; ++packed_index) {
+			const uint packed_row_index = packed_base + packed_index;
+			const float4 lhs0 = lhs_tile[x_base + packed_index * 2];
+			const float4 lhs1 = lhs_tile[x_base + packed_index * 2 + 1];
+			for (uint lane = 0; lane < kOutputsPerThread; ++lane) {
+				const uint col_index = col_base + lane;
+				if (col_index >= params.column_count) {
+					continue;
+				}
+				const float scale = scale_values[col_index * params.groups_per_row + group_index];
+				const float bias = qbias_values[col_index * params.groups_per_row + group_index];
+				const uint packed = qweight_values[col_index * params.packed_inner_dim + packed_row_index];
+				const float4 q0 = unpack_nibbles4(packed, 0, scale, bias);
+				const float4 q1 = unpack_nibbles4(packed, 16, scale, bias);
+				accumulators[lane] += dot(lhs0, q0);
+				accumulators[lane] += dot(lhs1, q1);
+			}
+		}
+	}
+
+	for (uint lane = 0; lane < kOutputsPerThread; ++lane) {
+		const uint col_index = col_base + lane;
+		if (col_index >= params.column_count) {
+			continue;
+		}
+		float accumulator = accumulators[lane];
+		if (params.add_residual != 0) {
+			accumulator += residual_values[row_index * params.output_row_stride + col_index];
+		}
+		if (params.enable_silu != 0) {
+			accumulator = accumulator / (1.0f + exp(-accumulator));
+		}
+		output_values[row_index * params.output_row_stride + col_index] = accumulator;
+	}
+}
+
+kernel void affine_qmm_t_4bit_lmhead2(const device float* lhs_values [[buffer(0)]],
+				      const device uint* qweight_values [[buffer(1)]],
+				      const device float* scale_values [[buffer(2)]],
+				      const device float* qbias_values [[buffer(3)]],
+				      const device float* residual_values [[buffer(4)]],
+				      device float* output_values [[buffer(5)]],
+				      constant AffineQmmParams& params [[buffer(6)]],
+				      uint tid [[thread_index_in_threadgroup]],
+				      uint2 tgid [[threadgroup_position_in_grid]]) {
+	if (params.bits != 4 || params.group_size == 0) {
+		return;
+	}
+	constexpr uint kOutputsPerThread = 2;
+	const uint row_index = tgid.y;
+	const uint col_base = tgid.x * 64 + tid * kOutputsPerThread;
+	if (row_index >= params.row_count) {
+		return;
+	}
+
+	threadgroup float4 lhs_tile[1024];
+	const uint lhs_vec_count = params.inner_dim / 4;
+	for (uint index = tid; index < lhs_vec_count; index += 32) {
+		const uint lhs_offset = row_index * params.inner_dim + index * 4;
+		lhs_tile[index] = *reinterpret_cast<const device float4*>(lhs_values + lhs_offset);
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+
+	float2 accumulators = float2(0.0f);
+	const uint packed_per_group = params.group_size / 8;
+	for (uint group_index = 0; group_index < params.groups_per_row; ++group_index) {
+		const float2 scales = float2(scale_values[(col_base + 0) * params.groups_per_row + group_index],
+					     scale_values[(col_base + 1) * params.groups_per_row + group_index]);
+		const float2 biases = float2(qbias_values[(col_base + 0) * params.groups_per_row + group_index],
+					     qbias_values[(col_base + 1) * params.groups_per_row + group_index]);
+		const uint packed_base = group_index * packed_per_group;
+		const uint x_base = (group_index * params.group_size) / 4;
+		for (uint packed_index = 0; packed_index < packed_per_group; ++packed_index) {
+			const uint packed_row_index = packed_base + packed_index;
+			const float4 lhs0 = lhs_tile[x_base + packed_index * 2];
+			const float4 lhs1 = lhs_tile[x_base + packed_index * 2 + 1];
+			const uint packed0 = qweight_values[(col_base + 0) * params.packed_inner_dim + packed_row_index];
+			const uint packed1 = qweight_values[(col_base + 1) * params.packed_inner_dim + packed_row_index];
+			const float4 q00 = unpack_nibbles4(packed0, 0, scales[0], biases[0]);
+			const float4 q01 = unpack_nibbles4(packed0, 16, scales[0], biases[0]);
+			const float4 q10 = unpack_nibbles4(packed1, 0, scales[1], biases[1]);
+			const float4 q11 = unpack_nibbles4(packed1, 16, scales[1], biases[1]);
+			accumulators[0] += dot(lhs0, q00) + dot(lhs1, q01);
+			accumulators[1] += dot(lhs0, q10) + dot(lhs1, q11);
+		}
+	}
+
+	output_values[row_index * params.output_row_stride + col_base + 0] = accumulators[0];
+	output_values[row_index * params.output_row_stride + col_base + 1] = accumulators[1];
 }
 
 kernel void elementwise_mul_f32(const device float* lhs_values [[buffer(0)]],

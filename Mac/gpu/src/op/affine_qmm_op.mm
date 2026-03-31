@@ -10,6 +10,43 @@
 namespace soc::gpu {
 namespace {
 
+bool UseExperimentalQ4MlpSpecialized() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_Q4_MLP_SPECIALIZED");
+    return value != nullptr && std::string(value) == "1";
+}
+
+bool UseExperimentalQ4LmheadSpecialized() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_Q4_LMHEAD_SPECIALIZED");
+    return value != nullptr && std::string(value) == "1";
+}
+
+bool UseExperimentalQ4DownprojSpecialized() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_Q4_DOWNPROJ_SPECIALIZED");
+    return value != nullptr && std::string(value) == "1";
+}
+
+bool IsMlpDecodeProfile(const char* profile_label) {
+    if (profile_label == nullptr) {
+        return false;
+    }
+    const std::string label(profile_label);
+    return label == "GateProjDecodeQ4" || label == "UpProjDecodeQ4" || label == "DownProjDecodeQ4";
+}
+
+bool IsLmheadDecodeProfile(const char* profile_label) {
+    if (profile_label == nullptr) {
+        return false;
+    }
+    return std::string(profile_label) == "LMHeadDecodeQ4";
+}
+
+bool IsDownprojDecodeProfile(const char* profile_label) {
+    if (profile_label == nullptr) {
+        return false;
+    }
+    return std::string(profile_label) == "DownProjDecodeQ4";
+}
+
 struct MetalAffineQmmParams {
     std::uint32_t row_count;
     std::uint32_t inner_dim;
@@ -156,8 +193,19 @@ bool AffineQmmOp::Run(const MetalContext& context,
 
     KernelKey key;
     key.kind = KernelKind::kEmbedding;
-    key.function_name = "affine_qmm_t_4bit";
-    key.threadgroup_width = 32;
+    const bool use_downproj_specialized =
+        params.row_count == 1 && UseExperimentalQ4DownprojSpecialized() && IsDownprojDecodeProfile(params.profile_label);
+    const bool use_mlp_specialized =
+        params.row_count == 1 && UseExperimentalQ4MlpSpecialized() && IsMlpDecodeProfile(params.profile_label) &&
+        !use_downproj_specialized;
+    const bool use_lmhead_specialized =
+        params.row_count == 1 && UseExperimentalQ4LmheadSpecialized() && IsLmheadDecodeProfile(params.profile_label);
+    key.function_name = use_downproj_specialized ? "affine_qmm_t_4bit_lmhead2"
+                                            : (use_mlp_specialized ? "affine_qmm_t_4bit_mlp2"
+                                            : ((use_lmhead_specialized || use_downproj_specialized)
+                                                   ? "affine_qmm_t_4bit_lmhead2"
+                                                   : "affine_qmm_t_4bit"));
+    key.threadgroup_width = use_mlp_specialized ? 16 : 32;
     key.threadgroup_height = 1;
     const void* pipeline_handle = pipeline_cache->GetOrCreatePipeline(key, error_message);
     if (pipeline_handle == nullptr) {
@@ -216,9 +264,14 @@ bool AffineQmmOp::Run(const MetalContext& context,
         [encoder setBuffer:output_buffer offset:output.GetByteOffset() atIndex:5];
         [encoder setBuffer:params_buffer offset:params_offset atIndex:6];
 
-        const MTLSize threadgroup_size = MTLSizeMake(32, 1, 1);
+        const std::uint32_t outputs_per_thread =
+            (use_mlp_specialized || use_lmhead_specialized || use_downproj_specialized) ? 2u : 1u;
+        const MTLSize threadgroup_size = MTLSizeMake(key.threadgroup_width, 1, 1);
         const MTLSize threadgroups_per_grid =
-            MTLSizeMake((params.column_count + 31) / 32, params.row_count, 1);
+            MTLSizeMake((params.column_count + (key.threadgroup_width * outputs_per_thread) - 1) /
+                            (key.threadgroup_width * outputs_per_thread),
+                        params.row_count,
+                        1);
         [encoder dispatchThreadgroups:threadgroups_per_grid threadsPerThreadgroup:threadgroup_size];
 
         if (stream != nullptr) {

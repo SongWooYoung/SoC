@@ -4,6 +4,7 @@
 
 #include "buffer/buffer_arena.h"
 #include "metal/command_stream.h"
+#include "metal/metal_context.h"
 #include "op/affine_qmm_op.h"
 #include "op/embedding_op.h"
 #include "op/linear_op.h"
@@ -89,6 +90,108 @@ bool UseExperimentalQ4LmHead() {
     return value != nullptr && std::string(value) == "1";
 }
 
+bool UseExperimentalDecodeFinalLogitsBatch() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_DECODE_FINAL_LOGITS_BATCH");
+    return value != nullptr && std::string(value) == "1";
+}
+
+bool DrainPendingAndReturn(const MetalContext& context,
+                           bool success,
+                           std::string* error_message) {
+    if (!success) {
+        return false;
+    }
+    return context.DrainPendingCommandBuffers(error_message);
+}
+
+bool ComputeDecodeLogitsFromPreNormHiddenBatched(const MetalContext& context,
+                                                 PipelineCache* pipeline_cache,
+                                                 const QwenCausalLMWeights& weights,
+                                                 const QwenCausalLMParams& params,
+                                                 const DeviceTensor& hidden_states,
+                                                 const DeviceTensor& logits_output,
+                                                 BufferArena* temporary_arena,
+                                                 std::string* error_message) {
+    if (temporary_arena == nullptr) {
+        if (error_message != nullptr) {
+            *error_message = "Decode final logits batch requires a temporary arena";
+        }
+        return false;
+    }
+
+    DeviceTensor normalized_hidden;
+    const TensorDesc hidden_desc = TensorDesc::CreateContiguous(DataType::kFloat32, {1, params.hidden_size});
+    if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &normalized_hidden, error_message)) {
+        return false;
+    }
+
+    CommandStream local_stream;
+    if (!local_stream.Begin(context, error_message)) {
+        return false;
+    }
+
+    RmsNormParams final_norm_params;
+    final_norm_params.epsilon = params.rms_norm_eps;
+    final_norm_params.row_count = 1;
+    final_norm_params.row_size = static_cast<std::uint32_t>(params.hidden_size);
+    if (!RmsNormOp::Run(context,
+                        pipeline_cache,
+                        hidden_states,
+                        weights.final_norm_weight,
+                        normalized_hidden,
+                        final_norm_params,
+                        temporary_arena,
+                        &local_stream,
+                        error_message)) {
+        return false;
+    }
+
+    if (weights.has_quantized_lm_head && UseExperimentalQ4LmHead()) {
+        AffineQmmParams qmm_params;
+        qmm_params.row_count = 1;
+        qmm_params.inner_dim = static_cast<std::uint32_t>(params.hidden_size);
+        qmm_params.column_count = static_cast<std::uint32_t>(params.vocab_size);
+        qmm_params.output_row_stride = static_cast<std::uint32_t>(params.vocab_size);
+        qmm_params.profile_label = "LMHeadDecodeQ4";
+        if (!AffineQmmOp::Run(context,
+                              pipeline_cache,
+                              normalized_hidden,
+                              weights.lm_head_q4_weight,
+                              nullptr,
+                              logits_output,
+                              qmm_params,
+                              temporary_arena,
+                              &local_stream,
+                              error_message)) {
+            return false;
+        }
+    } else {
+        LinearParams logits_params;
+        logits_params.matmul.row_count = 1;
+        logits_params.matmul.inner_dim = static_cast<std::uint32_t>(params.hidden_size);
+        logits_params.matmul.column_count = static_cast<std::uint32_t>(params.vocab_size);
+        logits_params.matmul.profile_label = "LMHeadDecode";
+        logits_params.matmul.decode_mode = true;
+        logits_params.matmul.transpose_rhs = true;
+        const DeviceTensor& projection_weight = weights.tie_word_embeddings ? weights.embed_tokens_weight : weights.lm_head_weight;
+        if (!LinearOp::Run(context,
+                           pipeline_cache,
+                           normalized_hidden,
+                           projection_weight,
+                           nullptr,
+                           nullptr,
+                           logits_output,
+                           logits_params,
+                           temporary_arena,
+                           &local_stream,
+                           error_message)) {
+            return false;
+        }
+    }
+
+    return local_stream.Flush(context, "DecodeFinalNormLmHeadBatch", error_message);
+}
+
 bool RunBlockRange(const MetalContext& context,
                    PipelineCache* pipeline_cache,
                    const QwenCausalLMWeights& weights,
@@ -138,7 +241,7 @@ bool RunBlockRange(const MetalContext& context,
                                   nullptr,
                                   error_message);
         }
-        return CopyTensorViaHost(input_hidden, output, error_message);
+        return DrainPendingAndReturn(context, CopyTensorViaHost(input_hidden, output, error_message), error_message);
     }
 
     BufferArenaMarkGuard arena_mark(temporary_arena, kv_cache == nullptr ? "QwenCausalLMHiddenRange" : (token_count == 1 ? "QwenCausalLMDecodeRange" : "QwenCausalLMPrefillRange"));
@@ -239,7 +342,8 @@ bool RunBlockRange(const MetalContext& context,
     }
 
     if (!apply_final_norm) {
-        return active_stream == nullptr ? true : active_stream->Flush(context, "FullRangeBatch", error_message);
+        const bool flushed = active_stream == nullptr ? true : active_stream->Flush(context, "FullRangeBatch", error_message);
+        return DrainPendingAndReturn(context, flushed, error_message);
     }
 
     RmsNormParams final_norm_params;
@@ -257,7 +361,8 @@ bool RunBlockRange(const MetalContext& context,
                           error_message)) {
         return false;
     }
-    return active_stream == nullptr ? true : active_stream->Flush(context, "FullRangeBatch", error_message);
+    const bool flushed = active_stream == nullptr ? true : active_stream->Flush(context, "FullRangeBatch", error_message);
+    return DrainPendingAndReturn(context, flushed, error_message);
 }
 
 }  // namespace
@@ -527,6 +632,28 @@ bool QwenCausalLM::ForwardLogits(const MetalContext& context,
     if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &hidden_states, error_message)) {
         return false;
     }
+    if (token_count == 1 && UseExperimentalDecodeFinalLogitsBatch()) {
+        if (!ForwardHiddenRange(context,
+                                pipeline_cache,
+                                token_ids,
+                                hidden_states,
+                                temporary_arena,
+                                position_offset,
+                                0,
+                                weights_.blocks.size(),
+                                false,
+                                error_message)) {
+            return false;
+        }
+        return ComputeDecodeLogitsFromPreNormHiddenBatched(context,
+                                                           pipeline_cache,
+                                                           weights_,
+                                                           params_,
+                                                           hidden_states,
+                                                           logits_output,
+                                                           temporary_arena,
+                                                           error_message);
+    }
     if (!ForwardHidden(context, pipeline_cache, token_ids, hidden_states, temporary_arena, position_offset, error_message)) {
         return false;
     }
@@ -546,6 +673,29 @@ bool QwenCausalLM::ForwardLogitsCached(const MetalContext& context,
     const TensorDesc hidden_desc = TensorDesc::CreateContiguous(DataType::kFloat32, {token_count, params_.hidden_size});
     if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &hidden_states, error_message)) {
         return false;
+    }
+    if (token_count == 1 && UseExperimentalDecodeFinalLogitsBatch()) {
+        if (!ForwardHiddenCachedRange(context,
+                                      pipeline_cache,
+                                      token_ids,
+                                      kv_cache,
+                                      hidden_states,
+                                      temporary_arena,
+                                      position_offset,
+                                      0,
+                                      weights_.blocks.size(),
+                                      false,
+                                      error_message)) {
+            return false;
+        }
+        return ComputeDecodeLogitsFromPreNormHiddenBatched(context,
+                                                           pipeline_cache,
+                                                           weights_,
+                                                           params_,
+                                                           hidden_states,
+                                                           logits_output,
+                                                           temporary_arena,
+                                                           error_message);
     }
     if (!ForwardHiddenCached(context, pipeline_cache, token_ids, kv_cache, hidden_states, temporary_arena, position_offset, error_message)) {
         return false;

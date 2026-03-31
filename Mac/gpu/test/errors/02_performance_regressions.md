@@ -239,6 +239,35 @@
 - `Mac/gpu/src/op/matmul_op.mm`
 - `Mac/gpu/shaders/gpu_kernels.metal`
 
+## 10. Deferred `DecodePostNormMlpBatch` Wait
+
+상태: `tested and kept experimental only`
+
+관찰:
+
+1. `SOC_GPU_ENABLE_EXPERIMENTAL_DEFERRED_MLP_WAIT=1`로 `DecodePostNormMlpBatch`를 block마다 기다리지 않고 token 끝까지 미루는 실험을 했다.
+2. profiling상 `DecodePostNormMlpBatch wait_ms`는 사실상 `0`으로 떨어졌다.
+3. 하지만 8-token quick run 전체는 오히려 악화됐다.
+4. `q4 + safe + block attention` 기준 `wall_ms ~1859 -> ~2801`, `wait_ms ~1840 -> ~2777`로 증가했다.
+
+원인 가설:
+
+1. `wait`를 한 군데서 덜어낸 대신 queue backlog가 다른 batch와 token-end drain으로 이동했다.
+2. persistent scratch와 deferred commit 자체는 correctness를 깨지 않았지만, 현재 그래프 크기에서는 in-flight work가 늘면서 오히려 end-to-end wall이 나빠졌다.
+3. 즉 "wait를 미룬다"와 "wall이 줄어든다"는 같지 않다.
+
+교훈:
+
+1. deferred wait는 profiling bucket 하나를 예쁘게 만드는 것만으로 채택하지 않는다.
+2. token-end drain까지 포함한 wall clock으로 판단해야 한다.
+3. queue ordering 기반 async 실험은 향후에도 가능하지만, 현재 구현은 기본 경로로 채택할 수 없다.
+
+관련 파일:
+
+- `Mac/gpu/src/module/qwen_block.mm`
+- `Mac/gpu/src/model/qwen_causal_lm.cpp`
+- `Mac/gpu/src/metal/metal_context.mm`
+
 ## 10. Prebuilt Decode Layer-Stream Replay
 
 상태: `rejected as default`, `unsafe experimental`
@@ -298,3 +327,63 @@
 - `Mac/gpu/src/module/qwen_mlp.mm`
 - `Mac/gpu/shaders/gpu_kernels.metal`
 - `Mac/gpu/build/reports/quick/labeled_breakdown_gateup_only.json`
+
+## 11. Decode `Q/K/V/O` Q4 Attention Specialization (`16x4`)
+
+상태: `rejected`
+
+관찰:
+
+1. `SOC_GPU_ENABLE_EXPERIMENTAL_Q4_ATTN_SPECIALIZED=1`로 `QProjDecodeQ4`, `KProjDecodeQ4`, `VProjDecodeQ4`, `OProjDecodeQ4`를 전용 `16x4` q4 kernel로 바꿨다.
+2. `8-token` quick run은 좋아 보였다. `wall_ms ~619 -> ~478`, `wait_ms ~582 -> ~457`, `DecodeBlockAttentionBatch gpu_ms ~56.0 -> ~48.9`.
+3. 하지만 `32-token` full benchmark 3-run 평균은 기존 `q4 MLP specialized` 기준 `25.37 tok/s`에서 `23.86 tok/s`로 내려갔다.
+4. 즉 quick improvement가 full decode throughput으로 이어지지 않았다.
+
+원인 가설:
+
+1. `outputs-per-thread=4`, `threadgroup width=16` 조합이 short run에서는 submit/wait를 줄였지만, long decode에서는 register pressure와 cache pressure가 커졌다.
+2. 특히 `OProj`를 `Q/K/V`와 같은 specialization에 묶은 점이 full decode에서 불리하게 작용했을 가능성이 높다.
+3. 이것은 attention 특화 자체의 문제라기보다, `Q/K/V/O`를 한꺼번에 `16x4`로 몰아넣는 방식이 장기 decode에서 맞지 않았다는 뜻이다.
+
+교훈:
+
+1. attention projection 특화는 `Q/K/V`와 `OProj`를 분리해서 다뤄야 한다.
+2. quick run만으로 승격하지 않는다.
+3. reviewer 의견대로 `32x2` 또는 `Q/K/V only`부터 좁게 시작하는 편이 안전하다.
+
+관련 파일:
+
+- `Mac/gpu/src/op/affine_qmm_op.mm`
+- `Mac/gpu/shaders/gpu_kernels.metal`
+- `Mac/gpu/build/reports/quick/q4_blockattn_logitbatch_qmmmlp_qmmattn_8tok.json`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_blockattn_logitbatch_qmmmlp_qmmattn/summary.json`
+
+## 12. Decode `Q/K/V` Q4 Attention Specialization (`32x2`)
+
+상태: `rejected`
+
+관찰:
+
+1. reviewer 조언대로 `Q/K/V`만 `32x2` q4 kernel로 좁힌 variant를 다시 시도했다.
+2. `8-token` hang check는 통과했지만, 실행 결과가 비정상적이었다.
+3. `gpu_infer --max-new-tokens 8` output에 `generated_token_ids: [0]`이 나타났고, 일부 리포트는 timing이 전부 `0`으로 기록되기도 했다.
+4. 즉 이 경로는 성능 이전에 correctness와 계측 신뢰성이 깨졌다.
+
+원인 가설:
+
+1. `32x2` 경로에서 column packing/indexing 또는 write-out 가정이 현재 q4 layout과 맞지 않았을 가능성이 높다.
+2. 방법론의 문제라기보다, 현재 구현의 `Q/K/V only` specialization이 안전한 결과를 보장하지 못했다.
+3. hang이 없다고 correctness가 보장되는 것은 아니다.
+
+교훈:
+
+1. attention specialization은 반드시 output token correctness와 timing integrity까지 같이 확인해야 한다.
+2. `generated_token_ids`나 timing JSON이 조금이라도 이상하면 즉시 폐기한다.
+3. 이후 attention 특화는 더 작은 실험 단위나 별도 검증 harness 없이 기본 경로 후보로 올리지 않는다.
+
+관련 파일:
+
+- `Mac/gpu/src/op/affine_qmm_op.mm`
+- `Mac/gpu/shaders/gpu_kernels.metal`
+- `Mac/gpu/build/reports/quick/q4_blockattn_logitbatch_qmmmlp_qmmattn2_8tok.json`
+- `Mac/gpu/build/reports/decode_hang_check_q4_blockattn_logitbatch_qmmmlp_qmmattn2.json`

@@ -52,6 +52,12 @@ public:
                                const char* profile_label,
                                std::size_t encoder_count,
                                std::string* error_message) const;
+    bool CommitCommandBufferDeferred(const void* command_buffer_handle,
+                                     const std::string& error_prefix,
+                                     const char* profile_label,
+                                     std::size_t encoder_count,
+                                     std::string* error_message) const;
+    bool DrainPendingCommandBuffers(std::string* error_message) const;
     bool RunBootstrapKernel(std::uint32_t input_value,
                             std::uint32_t* output_value,
                             std::string* error_message) const;

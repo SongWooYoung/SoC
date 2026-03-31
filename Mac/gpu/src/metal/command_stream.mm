@@ -124,6 +124,34 @@ bool CommandStream::Flush(const MetalContext& context, const char* profile_label
     return result;
 }
 
+bool CommandStream::FlushDeferred(const MetalContext& context, const char* profile_label, std::string* error_message) {
+    if (!active_) {
+        if (error_message != nullptr) {
+            *error_message = "CommandStream::FlushDeferred called without active stream";
+        }
+        return false;
+    }
+    if (current_encoder_ != nullptr) {
+        EndEncoder();
+    }
+
+    bool result = true;
+    @autoreleasepool {
+        id<MTLCommandBuffer> cb = (__bridge_transfer id<MTLCommandBuffer>)command_buffer_;
+        command_buffer_ = nullptr;
+        active_ = false;
+
+        if (cb != nil) {
+            result = context.CommitCommandBufferDeferred((__bridge const void*)cb,
+                                                         "CommandStream deferred flush failed",
+                                                         profile_label,
+                                                         encoder_count_,
+                                                         error_message);
+        }
+    }
+    return result;
+}
+
 bool CommandStream::IsActive() const {
     return active_;
 }

@@ -160,6 +160,11 @@ bool UseExperimentalSafeDecodeBatch() {
     return value != nullptr && std::string(value) == "1";
 }
 
+bool ScratchMatches(const DeviceTensor& tensor, const TensorDesc& expected_desc) {
+    return tensor.IsValid() && tensor.GetDesc().GetDataType() == expected_desc.GetDataType() &&
+           tensor.GetDesc().GetShape() == expected_desc.GetShape();
+}
+
 bool RunDecodeProjection(const MetalContext& context,
                          PipelineCache* pipeline_cache,
                          const DeviceTensor& input,
@@ -331,6 +336,7 @@ bool QwenMLP::Run(const MetalContext& context,
                   const DeviceTensor& output,
                   const QwenMlpParams& params,
                   BufferArena* temporary_arena,
+                  const QwenMlpScratch* scratch,
                   CommandStream* stream,
                   std::string* error_message) {
     if (pipeline_cache == nullptr) {
@@ -372,10 +378,19 @@ bool QwenMLP::Run(const MetalContext& context,
     DeviceTensor fused_tensor;
     const TensorDesc intermediate_desc =
         TensorDesc::CreateContiguous(DataType::kFloat32, {row_count, inferred_intermediate_size});
-    if (!AllocateTemporaryTensor(temporary_arena, intermediate_desc, &gate_tensor, error_message) ||
-        !AllocateTemporaryTensor(temporary_arena, intermediate_desc, &up_tensor, error_message) ||
-        !AllocateTemporaryTensor(temporary_arena, intermediate_desc, &fused_tensor, error_message)) {
-        return false;
+    if (scratch != nullptr &&
+        ScratchMatches(scratch->gate_tensor, intermediate_desc) &&
+        ScratchMatches(scratch->up_tensor, intermediate_desc) &&
+        ScratchMatches(scratch->fused_tensor, intermediate_desc)) {
+        gate_tensor = scratch->gate_tensor;
+        up_tensor = scratch->up_tensor;
+        fused_tensor = scratch->fused_tensor;
+    } else {
+        if (!AllocateTemporaryTensor(temporary_arena, intermediate_desc, &gate_tensor, error_message) ||
+            !AllocateTemporaryTensor(temporary_arena, intermediate_desc, &up_tensor, error_message) ||
+            !AllocateTemporaryTensor(temporary_arena, intermediate_desc, &fused_tensor, error_message)) {
+            return false;
+        }
     }
 
     if (use_local_decode_batch) {
