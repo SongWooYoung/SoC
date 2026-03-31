@@ -45,6 +45,7 @@ MATMUL_BENCH_BIN := $(BIN_DIR)/$(MATMUL_BENCH_TARGET)
 BASELINE_BENCH_BIN := $(BIN_DIR)/$(BASELINE_BENCH_TARGET)
 PHASE1_TEST_BIN := $(BIN_DIR)/$(PHASE1_TEST_TARGET)
 REAL_QWEN3_MANIFEST := $(abspath ../../models/cpp/qwen3-0.6b/manifest.json)
+REAL_QWEN3_F16_MANIFEST := $(abspath ../../models/cpp/qwen3-0.6b-f16/manifest.json)
 SWEEP_SCRIPT := tools/run_real_bundle_sweep.sh
 REAL_BUNDLE_REPORT := $(abspath $(REPORT_DIR)/test_real_bundle_regression_report.md)
 SWEEP_SUMMARY := $(abspath $(REPORT_DIR)/test_real_bundle_sweep_summary.md)
@@ -54,14 +55,23 @@ QUICK_SWEEP_SUMMARY := $(abspath $(QUICK_REPORT_DIR)/test_real_bundle_sweep_summ
 QUICK_SWEEP_REPORT_DIR := $(abspath $(QUICK_REPORT_DIR)/sweep_cases)
 LAYER_BENCH_OUTPUT_DIR := $(abspath $(REPORT_DIR)/layer_split_benchmark)
 LAYER_BENCH_REPORT := $(abspath $(REPORT_DIR)/layer_split_benchmark.md)
+FULL_GPU_VS_PYTORCH_OUTPUT_DIR := $(abspath $(REPORT_DIR)/full_gpu_vs_pytorch)
+FULL_GPU_VS_PYTORCH_REPORT := $(abspath $(REPORT_DIR)/full_gpu_vs_pytorch.md)
+HF_QWEN3_MODEL_DIR := $(abspath ../../models/hf/qwen3-0.6b)
 LAYER_BENCH_PROMPT ?= Hello world
 LAYER_BENCH_MAX_NEW_TOKENS ?= 64
+FULL_GPU_VS_PYTORCH_PROMPT ?= Hello world
+FULL_GPU_VS_PYTORCH_MAX_NEW_TOKENS ?= 64
+FULL_GPU_VS_PYTORCH_GPU_RUNS ?= 3
+FULL_GPU_VS_PYTORCH_PYTORCH_RUNS ?= 3
+FULL_GPU_VS_PYTORCH_PYTORCH_WARMUP ?= 1
+FULL_GPU_VS_PYTORCH_PYTORCH_DTYPE ?= float32
 ACTIVE_REAL_BUNDLE_REPORT ?= $(REAL_BUNDLE_REPORT)
 ACTIVE_SWEEP_SUMMARY ?= $(SWEEP_SUMMARY)
 ACTIVE_SWEEP_REPORT_DIR ?= $(SWEEP_REPORT_DIR)
 REAL_BUNDLE_MAX_NEW_TOKENS ?= 8
 SWEEP_MAX_NEW_TOKENS ?= 8
-PYTHON_BIN ?= /Users/song-ganghui/Documents/SoC/.venv/bin/python
+PYTHON_BIN ?= $(if $(wildcard ../../.venv/bin/python),$(abspath ../../.venv/bin/python),python3)
 
 METAL := xcrun -sdk macosx metal
 METALLIB_TOOL := xcrun -sdk macosx metallib
@@ -92,7 +102,7 @@ DEPFILES := $(CPP_OBJS:.o=.d) $(MM_OBJS:.o=.d) $(CPU_CPP_OBJS:.o=.d) $(MAIN_OBJ:
 
 DEPFILES += $(INFER_OBJ:.o=.d)
 
-.PHONY: all build-shaders build-main build-infer build-tests build-benchmarks bench-baseline check integration integration-real-bundle integration-sweep integration-sweep-quick run infer benchmark benchmark-layer-split regression real-bundle-regression real-bundle-regression-quick clean
+.PHONY: all build-shaders build-main build-infer build-tests build-benchmarks bench-baseline check integration integration-real-bundle integration-real-bundle-f16 integration-sweep integration-sweep-quick run infer benchmark benchmark-layer-split benchmark-layer-split-f16 benchmark-full-gpu-vs-pytorch regression real-bundle-regression real-bundle-regression-quick clean
 
 all: build-main
 
@@ -137,6 +147,14 @@ integration-real-bundle: $(INTEGRATION_TEST_BIN)
 	SOC_GPU_REPORT_PATH=$(ACTIVE_REAL_BUNDLE_REPORT) \
 	$(INTEGRATION_TEST_BIN)
 
+integration-real-bundle-f16: $(INTEGRATION_TEST_BIN)
+	@test -f $(REAL_QWEN3_F16_MANIFEST) || (echo "missing float16 real export bundle: $(REAL_QWEN3_F16_MANIFEST)" && exit 1)
+	@echo "Running float16 real-bundle regression with REAL_BUNDLE_MAX_NEW_TOKENS=$(REAL_BUNDLE_MAX_NEW_TOKENS)"
+	SOC_QWEN3_MANIFEST=$(REAL_QWEN3_F16_MANIFEST) \
+	SOC_QWEN_MAX_NEW_TOKENS=$(REAL_BUNDLE_MAX_NEW_TOKENS) \
+	SOC_GPU_REPORT_PATH=$(ACTIVE_REAL_BUNDLE_REPORT) \
+	$(INTEGRATION_TEST_BIN)
+
 integration-sweep: $(INTEGRATION_TEST_BIN)
 	@test -f $(REAL_QWEN3_MANIFEST) || (echo "missing real export bundle: $(REAL_QWEN3_MANIFEST)" && exit 1)
 	@echo "Running prompt sweep with SWEEP_MAX_NEW_TOKENS=$(SWEEP_MAX_NEW_TOKENS)"
@@ -170,6 +188,34 @@ benchmark-layer-split: $(INFER_BIN)
 		--report-path $(LAYER_BENCH_REPORT) \
 		--prompt "$(LAYER_BENCH_PROMPT)" \
 		--max-new-tokens $(LAYER_BENCH_MAX_NEW_TOKENS)
+
+benchmark-layer-split-f16: $(INFER_BIN)
+	@test -f $(REAL_QWEN3_F16_MANIFEST) || (echo "missing float16 real export bundle: $(REAL_QWEN3_F16_MANIFEST)" && exit 1)
+	$(PYTHON_BIN) tools/benchmark_layer_split.py \
+		--infer-bin $(INFER_BIN) \
+		--manifest $(REAL_QWEN3_F16_MANIFEST) \
+		--output-dir $(LAYER_BENCH_OUTPUT_DIR) \
+		--report-path $(LAYER_BENCH_REPORT) \
+		--prompt "$(LAYER_BENCH_PROMPT)" \
+		--max-new-tokens $(LAYER_BENCH_MAX_NEW_TOKENS)
+
+benchmark-full-gpu-vs-pytorch: $(INFER_BIN)
+	@test -f $(REAL_QWEN3_MANIFEST) || (echo "missing real export bundle: $(REAL_QWEN3_MANIFEST)" && exit 1)
+	@test -d $(HF_QWEN3_MODEL_DIR) || (echo "missing hf model dir: $(HF_QWEN3_MODEL_DIR)" && exit 1)
+	$(PYTHON_BIN) tools/benchmark_full_gpu_vs_pytorch.py \
+		--infer-bin $(INFER_BIN) \
+		--manifest $(REAL_QWEN3_MANIFEST) \
+		--hf-model $(HF_QWEN3_MODEL_DIR) \
+		--output-dir $(FULL_GPU_VS_PYTORCH_OUTPUT_DIR) \
+		--report-path $(FULL_GPU_VS_PYTORCH_REPORT) \
+		--prompt "$(FULL_GPU_VS_PYTORCH_PROMPT)" \
+		--max-new-tokens $(FULL_GPU_VS_PYTORCH_MAX_NEW_TOKENS) \
+		--gpu-runs $(FULL_GPU_VS_PYTORCH_GPU_RUNS) \
+		--pytorch-runs $(FULL_GPU_VS_PYTORCH_PYTORCH_RUNS) \
+		--pytorch-warmup $(FULL_GPU_VS_PYTORCH_PYTORCH_WARMUP) \
+		--python-bin $(PYTHON_BIN) \
+		--pytorch-script ../benchmark_pytorch.py \
+		--pytorch-dtype $(FULL_GPU_VS_PYTORCH_PYTORCH_DTYPE)
 
 regression:
 	$(MAKE) clean

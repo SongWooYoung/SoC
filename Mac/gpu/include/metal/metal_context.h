@@ -3,8 +3,16 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace soc::gpu {
+
+struct MetalProfilingEntry {
+    std::string label;
+    double gpu_ms = 0.0;
+    std::size_t command_buffer_count = 0;
+    std::size_t encoder_count = 0;
+};
 
 struct MetalDeviceInfo {
     std::string name;
@@ -19,6 +27,8 @@ struct MetalDeviceInfo {
 struct MetalProfilingSnapshot {
     double gpu_ms = 0.0;
     std::size_t command_buffer_count = 0;
+    std::size_t encoder_count = 0;
+    std::vector<MetalProfilingEntry> entries;
 };
 
 class MetalContext {
@@ -37,6 +47,8 @@ public:
     MetalProfilingSnapshot GetProfilingSnapshot() const;
     bool FinalizeCommandBuffer(const void* command_buffer_handle,
                                const std::string& error_prefix,
+                               const char* profile_label,
+                               std::size_t encoder_count,
                                std::string* error_message) const;
     bool RunBootstrapKernel(std::uint32_t input_value,
                             std::uint32_t* output_value,

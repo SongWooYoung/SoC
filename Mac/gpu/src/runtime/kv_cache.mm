@@ -45,8 +45,8 @@ std::unique_ptr<KVCache> KVCache::CreateShared(const MetalContext& context,
     }
     const std::size_t hidden_size = key_value_head_count * head_dim;
     const std::size_t byte_size = layer_count * max_sequence_length * hidden_size * sizeof(float);
-    auto key_buffer = MetalBuffer::CreateShared(context, byte_size, label + "_keys", error_message);
-    auto value_buffer = MetalBuffer::CreateShared(context, byte_size, label + "_values", error_message);
+    auto key_buffer = MetalBuffer::CreatePrivate(context, byte_size, label + "_keys", error_message);
+    auto value_buffer = MetalBuffer::CreatePrivate(context, byte_size, label + "_values", error_message);
     if (key_buffer == nullptr || value_buffer == nullptr) {
         return nullptr;
     }
@@ -210,6 +210,8 @@ bool KVCache::CopyIntoLayer(const MetalContext& context,
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "KVCache blit command failed",
+                                               "KVCacheBlit",
+                                               1,
                                                error_message)) {
                 return false;
             }

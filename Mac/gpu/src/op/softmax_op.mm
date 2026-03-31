@@ -142,6 +142,8 @@ bool SoftmaxOp::Run(const MetalContext& context,
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "Softmax command buffer failed",
+                                               "Softmax",
+                                               1,
                                                error_message)) {
                 return false;
             }

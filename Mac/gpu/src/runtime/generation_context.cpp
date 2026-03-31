@@ -187,6 +187,7 @@ void GenerationContext::Reset() {
     prompt_token_ids_.clear();
     running_token_ids_.clear();
     logits_buffer_.reset();
+    token_buffer_.reset();
 }
 
 const std::vector<int>& GenerationContext::prompt_token_ids() const { return prompt_token_ids_; }
@@ -204,18 +205,28 @@ bool GenerationContext::EnsureLogitsBuffer(const MetalContext& context,
     return logits_buffer_ != nullptr;
 }
 
+bool GenerationContext::EnsureTokenBuffer(const MetalContext& context,
+                                          std::size_t token_count,
+                                          std::string* error_message) {
+    const std::size_t required_size = token_count * sizeof(std::int32_t);
+    if (token_buffer_ != nullptr && token_buffer_->GetSizeBytes() >= required_size) {
+        return true;
+    }
+    token_buffer_ = MetalBuffer::CreateShared(context, required_size, "generation_tokens", error_message);
+    return token_buffer_ != nullptr;
+}
+
 bool GenerationContext::UploadTokenIds(const MetalContext& context,
                                        const std::vector<int>& token_ids,
                                        DeviceTensor* token_tensor,
                                        std::string* error_message) {
-    auto token_buffer = MetalBuffer::CreateShared(context, token_ids.size() * sizeof(std::int32_t), "generation_tokens", error_message);
-    if (token_buffer == nullptr) {
+    if (!EnsureTokenBuffer(context, token_ids.size(), error_message)) {
         return false;
     }
-    if (!token_buffer->Write(token_ids.data(), token_ids.size() * sizeof(std::int32_t), 0, error_message)) {
+    if (!token_buffer_->Write(token_ids.data(), token_ids.size() * sizeof(std::int32_t), 0, error_message)) {
         return false;
     }
-    *token_tensor = DeviceTensor(token_buffer, 0, TensorDesc::CreateContiguous(DataType::kInt32, {token_ids.size()}));
+    *token_tensor = DeviceTensor(token_buffer_, 0, TensorDesc::CreateContiguous(DataType::kInt32, {token_ids.size()}));
     return true;
 }
 

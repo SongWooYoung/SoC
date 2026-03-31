@@ -9,6 +9,7 @@ enum class DataType {
     kFloat16,
     kFloat32,
     kInt32,
+    kUInt32,
 };
 
 class TensorDesc {

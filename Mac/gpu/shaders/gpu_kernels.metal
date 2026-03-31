@@ -86,6 +86,20 @@ struct MatMulParams {
 	uint output_row_stride;
 };
 
+struct AffineQmmParams {
+	uint row_count;
+	uint inner_dim;
+	uint column_count;
+	uint output_row_stride;
+	uint packed_inner_dim;
+	uint groups_per_row;
+	uint group_size;
+	uint bits;
+	uint enable_silu;
+	uint add_residual;
+	uint padding;
+};
+
 kernel void rms_norm_f32_rowwise(const device float* input_values [[buffer(0)]],
 								 const device float* weight_values [[buffer(1)]],
 								 device float* output_values [[buffer(2)]],
@@ -104,6 +118,29 @@ kernel void rms_norm_f32_rowwise(const device float* input_values [[buffer(0)]],
 
 	const float inv_rms = rsqrt(sum_squares / static_cast<float>(params.row_size) + params.epsilon);
 	for (uint index = 0; index < params.row_size; ++index) {
+		output_values[base + index] = input_values[base + index] * inv_rms * weight_values[index];
+	}
+}
+
+kernel void rms_norm_f32_rowwise_simd(const device float* input_values [[buffer(0)]],
+									  const device float* weight_values [[buffer(1)]],
+									  device float* output_values [[buffer(2)]],
+									  constant RmsNormParams& params [[buffer(3)]],
+									  uint lane [[thread_index_in_threadgroup]],
+									  uint row_index [[threadgroup_position_in_grid]]) {
+	if (row_index >= params.row_count) {
+		return;
+	}
+
+	const uint base = row_index * params.row_size;
+	float partial_sum = 0.0f;
+	for (uint index = lane; index < params.row_size; index += 32) {
+		const float value = input_values[base + index];
+		partial_sum += value * value;
+	}
+	const float sum_squares = simd_sum(partial_sum);
+	const float inv_rms = rsqrt(sum_squares / static_cast<float>(params.row_size) + params.epsilon);
+	for (uint index = lane; index < params.row_size; index += 32) {
 		output_values[base + index] = input_values[base + index] * inv_rms * weight_values[index];
 	}
 }
@@ -239,6 +276,56 @@ kernel void sampler_topk_f32_rowwise(const device float* input_values [[buffer(0
 	}
 }
 
+kernel void affine_qmm_t_4bit(const device float* lhs_values [[buffer(0)]],
+			      const device uint* qweight_values [[buffer(1)]],
+			      const device float* scale_values [[buffer(2)]],
+			      const device float* qbias_values [[buffer(3)]],
+			      const device float* residual_values [[buffer(4)]],
+			      device float* output_values [[buffer(5)]],
+			      constant AffineQmmParams& params [[buffer(6)]],
+			      uint tid [[thread_index_in_threadgroup]],
+			      uint2 tgid [[threadgroup_position_in_grid]]) {
+	if (params.bits != 4 || params.group_size == 0) {
+		return;
+	}
+	const uint row_index = tgid.y;
+	const uint col_index = tgid.x * 32 + tid;
+	if (row_index >= params.row_count || col_index >= params.column_count) {
+		return;
+	}
+
+	threadgroup float lhs_tile[4096];
+	for (uint index = tid; index < params.inner_dim; index += 32) {
+		lhs_tile[index] = lhs_values[row_index * params.inner_dim + index];
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+
+	const uint packed_per_group = params.group_size / 8;
+	float accumulator = 0.0f;
+	for (uint group_index = 0; group_index < params.groups_per_row; ++group_index) {
+		const float scale = scale_values[col_index * params.groups_per_row + group_index];
+		const float bias = qbias_values[col_index * params.groups_per_row + group_index];
+		const uint packed_base = group_index * packed_per_group;
+		const uint x_base = group_index * params.group_size;
+		for (uint packed_index = 0; packed_index < packed_per_group; ++packed_index) {
+			const uint packed = qweight_values[col_index * params.packed_inner_dim + packed_base + packed_index];
+			const uint lhs_base = x_base + packed_index * 8;
+			for (uint nibble_index = 0; nibble_index < 8; ++nibble_index) {
+				const uint nibble = (packed >> (nibble_index * 4)) & 0xFu;
+				accumulator += (float(nibble) * scale + bias) * lhs_tile[lhs_base + nibble_index];
+			}
+		}
+	}
+
+	if (params.add_residual != 0) {
+		accumulator += residual_values[row_index * params.output_row_stride + col_index];
+	}
+	if (params.enable_silu != 0) {
+		accumulator = accumulator / (1.0f + exp(-accumulator));
+	}
+	output_values[row_index * params.output_row_stride + col_index] = accumulator;
+}
+
 kernel void elementwise_mul_f32(const device float* lhs_values [[buffer(0)]],
 					const device float* rhs_values [[buffer(1)]],
 					device float* output_values [[buffer(2)]],
@@ -347,8 +434,9 @@ kernel void matmul_f32_tiled(const device float* lhs_values [[buffer(0)]],
 		return;
 	}
 
-	threadgroup float lhs_tile[4][16];
-	threadgroup float rhs_tile[16][32];
+	constexpr uint kMatMulTileDepth = 32;
+	threadgroup float lhs_tile[4][kMatMulTileDepth];
+	threadgroup float rhs_tile[kMatMulTileDepth][32];
 
 	const uint row_index = tgid.y * kMatMulTileRows + tid.y;
 	const uint col_index = tgid.x * kMatMulTileColumns + tid.x;
@@ -356,11 +444,11 @@ kernel void matmul_f32_tiled(const device float* lhs_values [[buffer(0)]],
 	const uint threads_per_group = kMatMulTileColumns * kMatMulTileRows;
 	float accumulator = 0.0f;
 
-	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += 16) {
-		const uint lhs_load_count = kMatMulTileRows * 16;
+	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += kMatMulTileDepth) {
+		const uint lhs_load_count = kMatMulTileRows * kMatMulTileDepth;
 		for (uint load_index = linear_tid; load_index < lhs_load_count; load_index += threads_per_group) {
-			const uint local_row = load_index / 16;
-			const uint local_k = load_index % 16;
+			const uint local_row = load_index / kMatMulTileDepth;
+			const uint local_k = load_index % kMatMulTileDepth;
 			const uint global_row = tgid.y * kMatMulTileRows + local_row;
 			const uint global_k = tile_start + local_k;
 			lhs_tile[local_row][local_k] = (global_row < params.row_count && global_k < params.inner_dim)
@@ -368,7 +456,7 @@ kernel void matmul_f32_tiled(const device float* lhs_values [[buffer(0)]],
 				: 0.0f;
 		}
 
-		const uint rhs_load_count = 16 * kMatMulTileColumns;
+		const uint rhs_load_count = kMatMulTileDepth * kMatMulTileColumns;
 		for (uint load_index = linear_tid; load_index < rhs_load_count; load_index += threads_per_group) {
 			const uint local_k = load_index / kMatMulTileColumns;
 			const uint local_col = load_index % kMatMulTileColumns;
@@ -384,7 +472,7 @@ kernel void matmul_f32_tiled(const device float* lhs_values [[buffer(0)]],
 
 		threadgroup_barrier(mem_flags::mem_threadgroup);
 		if (row_index < params.row_count && col_index < params.column_count) {
-			const uint tile_extent = min(16u, params.inner_dim - tile_start);
+			const uint tile_extent = min(kMatMulTileDepth, params.inner_dim - tile_start);
 			for (uint local_k = 0; local_k < tile_extent; ++local_k) {
 				accumulator += lhs_tile[tid.y][local_k] * rhs_tile[local_k][tid.x];
 			}
@@ -408,9 +496,9 @@ kernel void matmul_f32_tiled(const device float* lhs_values [[buffer(0)]],
 }
 
 kernel void matmul_f32_decode_tiled(const device float* lhs_values [[buffer(0)]],
-					    const device float* rhs_values [[buffer(1)]],
-					    const device float* bias_values [[buffer(2)]],
-					    device float* output_values [[buffer(3)]],
+				    const device float* rhs_values [[buffer(1)]],
+				    const device float* bias_values [[buffer(2)]],
+				    device float* output_values [[buffer(3)]],
 					    constant MatMulParams& params [[buffer(4)]],
 					    const device float* residual_values [[buffer(5)]],
 					    uint tid [[thread_index_in_threadgroup]],
@@ -419,18 +507,19 @@ kernel void matmul_f32_decode_tiled(const device float* lhs_values [[buffer(0)]]
 		return;
 	}
 
-	threadgroup float lhs_tile[16];
-	threadgroup float rhs_tile[16][32];
+	constexpr uint kMatMulTileDepth = 32;
+	threadgroup float lhs_tile[kMatMulTileDepth];
+	threadgroup float rhs_tile[kMatMulTileDepth][32];
 	const uint col_index = tgid * kMatMulTileColumns + tid;
 	const uint threads_per_group = kMatMulTileColumns;
 	float accumulator = 0.0f;
 
-	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += 16) {
-		for (uint load_index = tid; load_index < 16; load_index += threads_per_group) {
+	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += kMatMulTileDepth) {
+		for (uint load_index = tid; load_index < kMatMulTileDepth; load_index += threads_per_group) {
 			const uint global_k = tile_start + load_index;
 			lhs_tile[load_index] = global_k < params.inner_dim ? lhs_values[global_k] : 0.0f;
 		}
-		for (uint load_index = tid; load_index < 16 * kMatMulTileColumns; load_index += threads_per_group) {
+		for (uint load_index = tid; load_index < kMatMulTileDepth * kMatMulTileColumns; load_index += threads_per_group) {
 			const uint local_k = load_index / kMatMulTileColumns;
 			const uint local_col = load_index % kMatMulTileColumns;
 			const uint global_k = tile_start + local_k;
@@ -444,7 +533,7 @@ kernel void matmul_f32_decode_tiled(const device float* lhs_values [[buffer(0)]]
 		}
 		threadgroup_barrier(mem_flags::mem_threadgroup);
 		if (tid < kMatMulTileColumns && col_index < params.column_count) {
-			const uint tile_extent = min(16u, params.inner_dim - tile_start);
+			const uint tile_extent = min(kMatMulTileDepth, params.inner_dim - tile_start);
 			for (uint local_k = 0; local_k < tile_extent; ++local_k) {
 				accumulator += lhs_tile[local_k] * rhs_tile[local_k][tid];
 			}
@@ -465,4 +554,661 @@ kernel void matmul_f32_decode_tiled(const device float* lhs_values [[buffer(0)]]
 		accumulator = accumulator / (1.0f + exp(-accumulator));
 	}
 	output_values[col_index] = accumulator;
+}
+
+kernel void matmul_f32_decode_tiled_vec4(const device float* lhs_values [[buffer(0)]],
+					 const device float* rhs_values [[buffer(1)]],
+					 const device float* bias_values [[buffer(2)]],
+					 device float* output_values [[buffer(3)]],
+					 constant MatMulParams& params [[buffer(4)]],
+					 const device float* residual_values [[buffer(5)]],
+					 uint tid [[thread_index_in_threadgroup]],
+					 uint tgid [[threadgroup_position_in_grid]]) {
+	if (kMatMulTileColumns == 0 || kMatMulTileColumns > 32 || !kMatMulTransposeRhs) {
+		return;
+	}
+
+	constexpr uint kMatMulTileDepth = 32;
+	constexpr uint kVecWidth = 4;
+	constexpr uint kTileVecCount = kMatMulTileDepth / kVecWidth;
+	threadgroup float4 lhs_tile[kTileVecCount];
+	threadgroup float4 rhs_tile[kTileVecCount][32];
+	const uint col_index = tgid * kMatMulTileColumns + tid;
+	const uint threads_per_group = kMatMulTileColumns;
+	float accumulator = 0.0f;
+
+	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += kMatMulTileDepth) {
+		for (uint load_index = tid; load_index < kTileVecCount; load_index += threads_per_group) {
+			const uint global_k = tile_start + load_index * kVecWidth;
+			if (global_k + 3 < params.inner_dim) {
+				lhs_tile[load_index] = *reinterpret_cast<const device float4*>(lhs_values + global_k);
+			} else {
+				float4 tail = float4(0.0f);
+				for (uint lane = 0; lane < kVecWidth; ++lane) {
+					const uint tail_k = global_k + lane;
+					tail[lane] = tail_k < params.inner_dim ? lhs_values[tail_k] : 0.0f;
+				}
+				lhs_tile[load_index] = tail;
+			}
+		}
+		for (uint load_index = tid; load_index < kTileVecCount * kMatMulTileColumns; load_index += threads_per_group) {
+			const uint local_vec = load_index / kMatMulTileColumns;
+			const uint local_col = load_index % kMatMulTileColumns;
+			const uint global_k = tile_start + local_vec * kVecWidth;
+			const uint global_col = tgid * kMatMulTileColumns + local_col;
+			float4 rhs_vec = float4(0.0f);
+			if (global_col < params.column_count) {
+				const uint rhs_index = global_col * params.rhs_row_stride + global_k;
+				if (global_k + 3 < params.inner_dim) {
+					rhs_vec = *reinterpret_cast<const device float4*>(rhs_values + rhs_index);
+				} else {
+					for (uint lane = 0; lane < kVecWidth; ++lane) {
+						const uint tail_k = global_k + lane;
+						rhs_vec[lane] = tail_k < params.inner_dim ? rhs_values[rhs_index + lane] : 0.0f;
+					}
+				}
+			}
+			rhs_tile[local_vec][local_col] = rhs_vec;
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (tid < kMatMulTileColumns && col_index < params.column_count) {
+			const uint tile_extent = min(kMatMulTileDepth, params.inner_dim - tile_start);
+			const uint full_vec_count = tile_extent / kVecWidth;
+			for (uint local_vec = 0; local_vec < full_vec_count; ++local_vec) {
+				accumulator += dot(lhs_tile[local_vec], rhs_tile[local_vec][tid]);
+			}
+			const uint tail_start = full_vec_count * kVecWidth;
+			if (tail_start < tile_extent) {
+				const float4 lhs_vec = lhs_tile[full_vec_count];
+				const float4 rhs_vec = rhs_tile[full_vec_count][tid];
+				for (uint lane = tail_start; lane < tile_extent; ++lane) {
+					const uint tail_lane = lane - tail_start;
+					accumulator += lhs_vec[tail_lane] * rhs_vec[tail_lane];
+				}
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+
+	if (tid >= kMatMulTileColumns || col_index >= params.column_count) {
+		return;
+	}
+	if (kMatMulUseBias) {
+		accumulator += bias_values[col_index];
+	}
+	if (kEnableResidual) {
+		accumulator += residual_values[col_index];
+	}
+	if (kEnableSiLU) {
+		accumulator = accumulator / (1.0f + exp(-accumulator));
+	}
+	output_values[col_index] = accumulator;
+}
+
+kernel void matmul_f32_decode_lmhead_vec4(const device float* lhs_values [[buffer(0)]],
+					  const device float* rhs_values [[buffer(1)]],
+					  const device float* bias_values [[buffer(2)]],
+					  device float* output_values [[buffer(3)]],
+					  constant MatMulParams& params [[buffer(4)]],
+					  const device float* residual_values [[buffer(5)]],
+					  uint tid [[thread_index_in_threadgroup]],
+					  uint tgid [[threadgroup_position_in_grid]]) {
+	constexpr uint kOutputsPerThread = 4;
+	constexpr uint kMatMulTileDepth = 32;
+	constexpr uint kVecWidth = 4;
+	constexpr uint kTileVecCount = kMatMulTileDepth / kVecWidth;
+	if (kMatMulTileColumns == 0 || (kMatMulTileColumns % kOutputsPerThread) != 0 || !kMatMulTransposeRhs) {
+		return;
+	}
+
+	threadgroup float4 lhs_tile[kTileVecCount];
+	const uint col_base = tgid * kMatMulTileColumns + tid * kOutputsPerThread;
+	const uint threads_per_group = kMatMulTileColumns / kOutputsPerThread;
+	float4 accumulators = float4(0.0f);
+
+	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += kMatMulTileDepth) {
+		for (uint load_index = tid; load_index < kTileVecCount; load_index += threads_per_group) {
+			const uint global_k = tile_start + load_index * kVecWidth;
+			if (global_k + 3 < params.inner_dim) {
+				lhs_tile[load_index] = *reinterpret_cast<const device float4*>(lhs_values + global_k);
+			} else {
+				float4 tail = float4(0.0f);
+				for (uint lane = 0; lane < kVecWidth; ++lane) {
+					const uint tail_k = global_k + lane;
+					tail[lane] = tail_k < params.inner_dim ? lhs_values[tail_k] : 0.0f;
+				}
+				lhs_tile[load_index] = tail;
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+
+		const uint tile_extent = min(kMatMulTileDepth, params.inner_dim - tile_start);
+		const uint full_vec_count = tile_extent / kVecWidth;
+		for (uint local_vec = 0; local_vec < full_vec_count; ++local_vec) {
+			const uint global_k = tile_start + local_vec * kVecWidth;
+			const float4 lhs_vec = lhs_tile[local_vec];
+			for (uint output_lane = 0; output_lane < kOutputsPerThread; ++output_lane) {
+				const uint global_col = col_base + output_lane;
+				if (global_col >= params.column_count) {
+					continue;
+				}
+				const uint rhs_index = global_col * params.rhs_row_stride + global_k;
+				const float4 rhs_vec = *reinterpret_cast<const device float4*>(rhs_values + rhs_index);
+				accumulators[output_lane] += dot(lhs_vec, rhs_vec);
+			}
+		}
+		const uint tail_start = full_vec_count * kVecWidth;
+		if (tail_start < tile_extent) {
+			const float4 lhs_vec = lhs_tile[full_vec_count];
+			for (uint output_lane = 0; output_lane < kOutputsPerThread; ++output_lane) {
+				const uint global_col = col_base + output_lane;
+				if (global_col >= params.column_count) {
+					continue;
+				}
+				const uint rhs_index = global_col * params.rhs_row_stride + tile_start + tail_start;
+				for (uint lane = 0; lane < tile_extent - tail_start; ++lane) {
+					accumulators[output_lane] += lhs_vec[lane] * rhs_values[rhs_index + lane];
+				}
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+
+	for (uint output_lane = 0; output_lane < kOutputsPerThread; ++output_lane) {
+		const uint global_col = col_base + output_lane;
+		if (global_col >= params.column_count) {
+			continue;
+		}
+		float accumulator = accumulators[output_lane];
+		if (kMatMulUseBias) {
+			accumulator += bias_values[global_col];
+		}
+		if (kEnableResidual) {
+			accumulator += residual_values[global_col];
+		}
+		if (kEnableSiLU) {
+			accumulator = accumulator / (1.0f + exp(-accumulator));
+		}
+		output_values[global_col] = accumulator;
+	}
+}
+
+kernel void matmul_f32_f16rhs_basic(const device float* lhs_values [[buffer(0)]],
+						 const device half* rhs_values [[buffer(1)]],
+						 const device float* bias_values [[buffer(2)]],
+						 device float* output_values [[buffer(3)]],
+						 constant MatMulParams& params [[buffer(4)]],
+						 const device float* residual_values [[buffer(5)]],
+						 uint2 gid [[thread_position_in_grid]]) {
+	if (gid.y >= params.row_count || gid.x >= params.column_count) {
+		return;
+	}
+	if (kMatMulTileColumns == 0 || kMatMulTileRows == 0) {
+		return;
+	}
+
+	const uint row_index = gid.y;
+	const uint lhs_base = kMatMulDecodeMode ? 0u : row_index * params.lhs_row_stride;
+	float accumulator = 0.0f;
+	for (uint inner_index = 0; inner_index < params.inner_dim; ++inner_index) {
+		const uint rhs_index = kMatMulTransposeRhs
+			? gid.x * params.rhs_row_stride + inner_index
+			: inner_index * params.rhs_row_stride + gid.x;
+		accumulator += lhs_values[lhs_base + inner_index] * static_cast<float>(rhs_values[rhs_index]);
+	}
+	if (kMatMulUseBias) {
+		accumulator += bias_values[gid.x];
+	}
+	if (kEnableResidual) {
+		const uint residual_index = kMatMulDecodeMode ? gid.x : row_index * params.output_row_stride + gid.x;
+		accumulator += residual_values[residual_index];
+	}
+	if (kEnableSiLU) {
+		accumulator = accumulator / (1.0f + exp(-accumulator));
+	}
+
+	const uint output_index = kMatMulDecodeMode ? gid.x : row_index * params.output_row_stride + gid.x;
+	output_values[output_index] = accumulator;
+}
+
+kernel void matmul_f32_f16rhs_tiled(const device float* lhs_values [[buffer(0)]],
+					 const device half* rhs_values [[buffer(1)]],
+					 const device float* bias_values [[buffer(2)]],
+					 device float* output_values [[buffer(3)]],
+					 constant MatMulParams& params [[buffer(4)]],
+					 const device float* residual_values [[buffer(5)]],
+					 uint2 tid [[thread_position_in_threadgroup]],
+					 uint2 tgid [[threadgroup_position_in_grid]]) {
+	if (kMatMulTileColumns == 0 || kMatMulTileRows == 0 || kMatMulTileColumns > 32 || kMatMulTileRows > 4) {
+		return;
+	}
+
+	constexpr uint kMatMulTileDepth = 32;
+	threadgroup float lhs_tile[4][kMatMulTileDepth];
+	threadgroup float rhs_tile[kMatMulTileDepth][32];
+
+	const uint row_index = tgid.y * kMatMulTileRows + tid.y;
+	const uint col_index = tgid.x * kMatMulTileColumns + tid.x;
+	const uint linear_tid = tid.y * kMatMulTileColumns + tid.x;
+	const uint threads_per_group = kMatMulTileColumns * kMatMulTileRows;
+	float accumulator = 0.0f;
+
+	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += kMatMulTileDepth) {
+		const uint lhs_load_count = kMatMulTileRows * kMatMulTileDepth;
+		for (uint load_index = linear_tid; load_index < lhs_load_count; load_index += threads_per_group) {
+			const uint local_row = load_index / kMatMulTileDepth;
+			const uint local_k = load_index % kMatMulTileDepth;
+			const uint global_row = tgid.y * kMatMulTileRows + local_row;
+			const uint global_k = tile_start + local_k;
+			lhs_tile[local_row][local_k] = (global_row < params.row_count && global_k < params.inner_dim)
+				? lhs_values[global_row * params.lhs_row_stride + global_k]
+				: 0.0f;
+		}
+
+		const uint rhs_load_count = kMatMulTileDepth * kMatMulTileColumns;
+		for (uint load_index = linear_tid; load_index < rhs_load_count; load_index += threads_per_group) {
+			const uint local_k = load_index / kMatMulTileColumns;
+			const uint local_col = load_index % kMatMulTileColumns;
+			const uint global_k = tile_start + local_k;
+			const uint global_col = tgid.x * kMatMulTileColumns + local_col;
+			const uint rhs_index = kMatMulTransposeRhs
+				? global_col * params.rhs_row_stride + global_k
+				: global_k * params.rhs_row_stride + global_col;
+			rhs_tile[local_k][local_col] = (global_k < params.inner_dim && global_col < params.column_count)
+				? static_cast<float>(rhs_values[rhs_index])
+				: 0.0f;
+		}
+
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (row_index < params.row_count && col_index < params.column_count) {
+			const uint tile_extent = min(kMatMulTileDepth, params.inner_dim - tile_start);
+			for (uint local_k = 0; local_k < tile_extent; ++local_k) {
+				accumulator += lhs_tile[tid.y][local_k] * rhs_tile[local_k][tid.x];
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+
+	if (row_index >= params.row_count || col_index >= params.column_count) {
+		return;
+	}
+	if (kMatMulUseBias) {
+		accumulator += bias_values[col_index];
+	}
+	if (kEnableResidual) {
+		accumulator += residual_values[row_index * params.output_row_stride + col_index];
+	}
+	if (kEnableSiLU) {
+		accumulator = accumulator / (1.0f + exp(-accumulator));
+	}
+	output_values[row_index * params.output_row_stride + col_index] = accumulator;
+}
+
+kernel void matmul_f32_f16rhs_decode_tiled(const device float* lhs_values [[buffer(0)]],
+					    const device half* rhs_values [[buffer(1)]],
+					    const device float* bias_values [[buffer(2)]],
+					    device float* output_values [[buffer(3)]],
+					    constant MatMulParams& params [[buffer(4)]],
+					    const device float* residual_values [[buffer(5)]],
+					    uint tid [[thread_index_in_threadgroup]],
+					    uint tgid [[threadgroup_position_in_grid]]) {
+	if (kMatMulTileColumns == 0 || kMatMulTileColumns > 32) {
+		return;
+	}
+
+	constexpr uint kMatMulTileDepth = 32;
+	threadgroup float lhs_tile[kMatMulTileDepth];
+	threadgroup float rhs_tile[kMatMulTileDepth][32];
+	const uint col_index = tgid * kMatMulTileColumns + tid;
+	const uint threads_per_group = kMatMulTileColumns;
+	float accumulator = 0.0f;
+
+	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += kMatMulTileDepth) {
+		for (uint load_index = tid; load_index < kMatMulTileDepth; load_index += threads_per_group) {
+			const uint global_k = tile_start + load_index;
+			lhs_tile[load_index] = global_k < params.inner_dim ? lhs_values[global_k] : 0.0f;
+		}
+		for (uint load_index = tid; load_index < kMatMulTileDepth * kMatMulTileColumns; load_index += threads_per_group) {
+			const uint local_k = load_index / kMatMulTileColumns;
+			const uint local_col = load_index % kMatMulTileColumns;
+			const uint global_k = tile_start + local_k;
+			const uint global_col = tgid * kMatMulTileColumns + local_col;
+			const uint rhs_index = kMatMulTransposeRhs
+				? global_col * params.rhs_row_stride + global_k
+				: global_k * params.rhs_row_stride + global_col;
+			rhs_tile[local_k][local_col] = (global_col < params.column_count && global_k < params.inner_dim)
+				? static_cast<float>(rhs_values[rhs_index])
+				: 0.0f;
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (tid < kMatMulTileColumns && col_index < params.column_count) {
+			const uint tile_extent = min(kMatMulTileDepth, params.inner_dim - tile_start);
+			for (uint local_k = 0; local_k < tile_extent; ++local_k) {
+				accumulator += lhs_tile[local_k] * rhs_tile[local_k][tid];
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+
+	if (tid >= kMatMulTileColumns || col_index >= params.column_count) {
+		return;
+	}
+	if (kMatMulUseBias) {
+		accumulator += bias_values[col_index];
+	}
+	if (kEnableResidual) {
+		accumulator += residual_values[col_index];
+	}
+	if (kEnableSiLU) {
+		accumulator = accumulator / (1.0f + exp(-accumulator));
+	}
+	output_values[col_index] = accumulator;
+}
+
+kernel void matmul_f32_f16rhs_decode_tiled_vec4(const device float* lhs_values [[buffer(0)]],
+						const device half* rhs_values [[buffer(1)]],
+						const device float* bias_values [[buffer(2)]],
+						device float* output_values [[buffer(3)]],
+						constant MatMulParams& params [[buffer(4)]],
+						const device float* residual_values [[buffer(5)]],
+						uint tid [[thread_index_in_threadgroup]],
+						uint tgid [[threadgroup_position_in_grid]]) {
+	if (kMatMulTileColumns == 0 || kMatMulTileColumns > 32 || !kMatMulTransposeRhs) {
+		return;
+	}
+
+	constexpr uint kMatMulTileDepth = 32;
+	constexpr uint kVecWidth = 4;
+	constexpr uint kTileVecCount = kMatMulTileDepth / kVecWidth;
+	threadgroup float4 lhs_tile[kTileVecCount];
+	threadgroup float4 rhs_tile[kTileVecCount][32];
+	const uint col_index = tgid * kMatMulTileColumns + tid;
+	const uint threads_per_group = kMatMulTileColumns;
+	float accumulator = 0.0f;
+
+	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += kMatMulTileDepth) {
+		for (uint load_index = tid; load_index < kTileVecCount; load_index += threads_per_group) {
+			const uint global_k = tile_start + load_index * kVecWidth;
+			if (global_k + 3 < params.inner_dim) {
+				lhs_tile[load_index] = *reinterpret_cast<const device float4*>(lhs_values + global_k);
+			} else {
+				float4 tail = float4(0.0f);
+				for (uint lane = 0; lane < kVecWidth; ++lane) {
+					const uint tail_k = global_k + lane;
+					tail[lane] = tail_k < params.inner_dim ? lhs_values[tail_k] : 0.0f;
+				}
+				lhs_tile[load_index] = tail;
+			}
+		}
+		for (uint load_index = tid; load_index < kTileVecCount * kMatMulTileColumns; load_index += threads_per_group) {
+			const uint local_vec = load_index / kMatMulTileColumns;
+			const uint local_col = load_index % kMatMulTileColumns;
+			const uint global_k = tile_start + local_vec * kVecWidth;
+			const uint global_col = tgid * kMatMulTileColumns + local_col;
+			float4 rhs_vec = float4(0.0f);
+			if (global_col < params.column_count) {
+				const uint rhs_index = global_col * params.rhs_row_stride + global_k;
+				if (global_k + 3 < params.inner_dim) {
+					const half4 packed = *reinterpret_cast<const device half4*>(rhs_values + rhs_index);
+					rhs_vec = float4(packed);
+				} else {
+					for (uint lane = 0; lane < kVecWidth; ++lane) {
+						const uint tail_k = global_k + lane;
+						rhs_vec[lane] = tail_k < params.inner_dim ? static_cast<float>(rhs_values[rhs_index + lane]) : 0.0f;
+					}
+				}
+			}
+			rhs_tile[local_vec][local_col] = rhs_vec;
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (tid < kMatMulTileColumns && col_index < params.column_count) {
+			const uint tile_extent = min(kMatMulTileDepth, params.inner_dim - tile_start);
+			const uint full_vec_count = tile_extent / kVecWidth;
+			for (uint local_vec = 0; local_vec < full_vec_count; ++local_vec) {
+				accumulator += dot(lhs_tile[local_vec], rhs_tile[local_vec][tid]);
+			}
+			const uint tail_start = full_vec_count * kVecWidth;
+			if (tail_start < tile_extent) {
+				const float4 lhs_vec = lhs_tile[full_vec_count];
+				const float4 rhs_vec = rhs_tile[full_vec_count][tid];
+				for (uint lane = tail_start; lane < tile_extent; ++lane) {
+					const uint tail_lane = lane - tail_start;
+					accumulator += lhs_vec[tail_lane] * rhs_vec[tail_lane];
+				}
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+
+	if (tid >= kMatMulTileColumns || col_index >= params.column_count) {
+		return;
+	}
+	if (kMatMulUseBias) {
+		accumulator += bias_values[col_index];
+	}
+	if (kEnableResidual) {
+		accumulator += residual_values[col_index];
+	}
+	if (kEnableSiLU) {
+		accumulator = accumulator / (1.0f + exp(-accumulator));
+	}
+	output_values[col_index] = accumulator;
+}
+
+kernel void matmul_f32_f16rhs_decode_lmhead_vec4(const device float* lhs_values [[buffer(0)]],
+						 const device half* rhs_values [[buffer(1)]],
+						 const device float* bias_values [[buffer(2)]],
+						 device float* output_values [[buffer(3)]],
+						 constant MatMulParams& params [[buffer(4)]],
+						 const device float* residual_values [[buffer(5)]],
+						 uint tid [[thread_index_in_threadgroup]],
+						 uint tgid [[threadgroup_position_in_grid]]) {
+	constexpr uint kOutputsPerThread = 4;
+	constexpr uint kMatMulTileDepth = 32;
+	constexpr uint kVecWidth = 4;
+	constexpr uint kTileVecCount = kMatMulTileDepth / kVecWidth;
+	if (kMatMulTileColumns == 0 || (kMatMulTileColumns % kOutputsPerThread) != 0 || !kMatMulTransposeRhs) {
+		return;
+	}
+
+	threadgroup float4 lhs_tile[kTileVecCount];
+	const uint col_base = tgid * kMatMulTileColumns + tid * kOutputsPerThread;
+	const uint threads_per_group = kMatMulTileColumns / kOutputsPerThread;
+	float4 accumulators = float4(0.0f);
+
+	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += kMatMulTileDepth) {
+		for (uint load_index = tid; load_index < kTileVecCount; load_index += threads_per_group) {
+			const uint global_k = tile_start + load_index * kVecWidth;
+			if (global_k + 3 < params.inner_dim) {
+				lhs_tile[load_index] = *reinterpret_cast<const device float4*>(lhs_values + global_k);
+			} else {
+				float4 tail = float4(0.0f);
+				for (uint lane = 0; lane < kVecWidth; ++lane) {
+					const uint tail_k = global_k + lane;
+					tail[lane] = tail_k < params.inner_dim ? lhs_values[tail_k] : 0.0f;
+				}
+				lhs_tile[load_index] = tail;
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+
+		const uint tile_extent = min(kMatMulTileDepth, params.inner_dim - tile_start);
+		const uint full_vec_count = tile_extent / kVecWidth;
+		for (uint local_vec = 0; local_vec < full_vec_count; ++local_vec) {
+			const uint global_k = tile_start + local_vec * kVecWidth;
+			const float4 lhs_vec = lhs_tile[local_vec];
+			for (uint output_lane = 0; output_lane < kOutputsPerThread; ++output_lane) {
+				const uint global_col = col_base + output_lane;
+				if (global_col >= params.column_count) {
+					continue;
+				}
+				const uint rhs_index = global_col * params.rhs_row_stride + global_k;
+				const half4 packed = *reinterpret_cast<const device half4*>(rhs_values + rhs_index);
+				accumulators[output_lane] += dot(lhs_vec, float4(packed));
+			}
+		}
+		const uint tail_start = full_vec_count * kVecWidth;
+		if (tail_start < tile_extent) {
+			const float4 lhs_vec = lhs_tile[full_vec_count];
+			for (uint output_lane = 0; output_lane < kOutputsPerThread; ++output_lane) {
+				const uint global_col = col_base + output_lane;
+				if (global_col >= params.column_count) {
+					continue;
+				}
+				const uint rhs_index = global_col * params.rhs_row_stride + tile_start + tail_start;
+				for (uint lane = 0; lane < tile_extent - tail_start; ++lane) {
+					accumulators[output_lane] += lhs_vec[lane] * static_cast<float>(rhs_values[rhs_index + lane]);
+				}
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+
+	for (uint output_lane = 0; output_lane < kOutputsPerThread; ++output_lane) {
+		const uint global_col = col_base + output_lane;
+		if (global_col >= params.column_count) {
+			continue;
+		}
+		float accumulator = accumulators[output_lane];
+		if (kMatMulUseBias) {
+			accumulator += bias_values[global_col];
+		}
+		if (kEnableResidual) {
+			accumulator += residual_values[global_col];
+		}
+		if (kEnableSiLU) {
+			accumulator = accumulator / (1.0f + exp(-accumulator));
+		}
+		output_values[global_col] = accumulator;
+	}
+}
+
+kernel void dual_matmul_f32_decode_vec4(const device float* lhs_values [[buffer(0)]],
+					const device float* rhs0_values [[buffer(1)]],
+					const device float* rhs1_values [[buffer(2)]],
+					device float* output0_values [[buffer(3)]],
+					device float* output1_values [[buffer(4)]],
+					constant MatMulParams& params [[buffer(5)]],
+					uint tid [[thread_index_in_threadgroup]],
+					uint tgid [[threadgroup_position_in_grid]]) {
+	constexpr uint kMatMulTileDepth = 32;
+	constexpr uint kVecWidth = 4;
+	constexpr uint kTileVecCount = kMatMulTileDepth / kVecWidth;
+	if (params.column_count == 0) {
+		return;
+	}
+
+	threadgroup float4 lhs_tile[kTileVecCount];
+	const uint col_index = tgid * 32 + tid;
+	float accumulator0 = 0.0f;
+	float accumulator1 = 0.0f;
+
+	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += kMatMulTileDepth) {
+		for (uint load_index = tid; load_index < kTileVecCount; load_index += 32) {
+			const uint global_k = tile_start + load_index * kVecWidth;
+			if (global_k + 3 < params.inner_dim) {
+				lhs_tile[load_index] = *reinterpret_cast<const device float4*>(lhs_values + global_k);
+			} else {
+				float4 tail = float4(0.0f);
+				for (uint lane = 0; lane < kVecWidth; ++lane) {
+					const uint tail_k = global_k + lane;
+					tail[lane] = tail_k < params.inner_dim ? lhs_values[tail_k] : 0.0f;
+				}
+				lhs_tile[load_index] = tail;
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (col_index < params.column_count) {
+			const uint tile_extent = min(kMatMulTileDepth, params.inner_dim - tile_start);
+			const uint full_vec_count = tile_extent / kVecWidth;
+			for (uint local_vec = 0; local_vec < full_vec_count; ++local_vec) {
+				const uint global_k = tile_start + local_vec * kVecWidth;
+				const float4 lhs_vec = lhs_tile[local_vec];
+				const uint rhs_index = col_index * params.rhs_row_stride + global_k;
+				accumulator0 += dot(lhs_vec, *reinterpret_cast<const device float4*>(rhs0_values + rhs_index));
+				accumulator1 += dot(lhs_vec, *reinterpret_cast<const device float4*>(rhs1_values + rhs_index));
+			}
+			const uint tail_start = full_vec_count * kVecWidth;
+			if (tail_start < tile_extent) {
+				const float4 lhs_vec = lhs_tile[full_vec_count];
+				const uint rhs_index = col_index * params.rhs_row_stride + tile_start + tail_start;
+				for (uint lane = 0; lane < tile_extent - tail_start; ++lane) {
+					accumulator0 += lhs_vec[lane] * rhs0_values[rhs_index + lane];
+					accumulator1 += lhs_vec[lane] * rhs1_values[rhs_index + lane];
+				}
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+
+	if (col_index >= params.column_count) {
+		return;
+	}
+	output0_values[col_index] = accumulator0 / (1.0f + exp(-accumulator0));
+	output1_values[col_index] = accumulator1;
+}
+
+kernel void dual_matmul_f32_f16rhs_decode_vec4(const device float* lhs_values [[buffer(0)]],
+					       const device half* rhs0_values [[buffer(1)]],
+					       const device half* rhs1_values [[buffer(2)]],
+					       device float* output0_values [[buffer(3)]],
+					       device float* output1_values [[buffer(4)]],
+					       constant MatMulParams& params [[buffer(5)]],
+					       uint tid [[thread_index_in_threadgroup]],
+					       uint tgid [[threadgroup_position_in_grid]]) {
+	constexpr uint kMatMulTileDepth = 32;
+	constexpr uint kVecWidth = 4;
+	constexpr uint kTileVecCount = kMatMulTileDepth / kVecWidth;
+	if (params.column_count == 0) {
+		return;
+	}
+
+	threadgroup float4 lhs_tile[kTileVecCount];
+	const uint col_index = tgid * 32 + tid;
+	float accumulator0 = 0.0f;
+	float accumulator1 = 0.0f;
+
+	for (uint tile_start = 0; tile_start < params.inner_dim; tile_start += kMatMulTileDepth) {
+		for (uint load_index = tid; load_index < kTileVecCount; load_index += 32) {
+			const uint global_k = tile_start + load_index * kVecWidth;
+			if (global_k + 3 < params.inner_dim) {
+				lhs_tile[load_index] = *reinterpret_cast<const device float4*>(lhs_values + global_k);
+			} else {
+				float4 tail = float4(0.0f);
+				for (uint lane = 0; lane < kVecWidth; ++lane) {
+					const uint tail_k = global_k + lane;
+					tail[lane] = tail_k < params.inner_dim ? lhs_values[tail_k] : 0.0f;
+				}
+				lhs_tile[load_index] = tail;
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (col_index < params.column_count) {
+			const uint tile_extent = min(kMatMulTileDepth, params.inner_dim - tile_start);
+			const uint full_vec_count = tile_extent / kVecWidth;
+			for (uint local_vec = 0; local_vec < full_vec_count; ++local_vec) {
+				const uint global_k = tile_start + local_vec * kVecWidth;
+				const float4 lhs_vec = lhs_tile[local_vec];
+				const uint rhs_index = col_index * params.rhs_row_stride + global_k;
+				accumulator0 += dot(lhs_vec, float4(*reinterpret_cast<const device half4*>(rhs0_values + rhs_index)));
+				accumulator1 += dot(lhs_vec, float4(*reinterpret_cast<const device half4*>(rhs1_values + rhs_index)));
+			}
+			const uint tail_start = full_vec_count * kVecWidth;
+			if (tail_start < tile_extent) {
+				const float4 lhs_vec = lhs_tile[full_vec_count];
+				const uint rhs_index = col_index * params.rhs_row_stride + tile_start + tail_start;
+				for (uint lane = 0; lane < tile_extent - tail_start; ++lane) {
+					accumulator0 += lhs_vec[lane] * static_cast<float>(rhs0_values[rhs_index + lane]);
+					accumulator1 += lhs_vec[lane] * static_cast<float>(rhs1_values[rhs_index + lane]);
+				}
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+
+	if (col_index >= params.column_count) {
+		return;
+	}
+	output0_values[col_index] = accumulator0 / (1.0f + exp(-accumulator0));
+	output1_values[col_index] = accumulator1;
 }

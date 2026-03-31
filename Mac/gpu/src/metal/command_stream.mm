@@ -95,7 +95,7 @@ void CommandStream::EndEncoder() {
     }
 }
 
-bool CommandStream::Flush(const MetalContext& context, std::string* error_message) {
+bool CommandStream::Flush(const MetalContext& context, const char* profile_label, std::string* error_message) {
     if (!active_) {
         if (error_message != nullptr) {
             *error_message = "CommandStream::Flush called without active stream";
@@ -116,6 +116,8 @@ bool CommandStream::Flush(const MetalContext& context, std::string* error_messag
         if (cb != nil) {
             result = context.FinalizeCommandBuffer((__bridge const void*)cb,
                                                     "CommandStream flush failed",
+                                                    profile_label,
+                                                    encoder_count_,
                                                     error_message);
         }
     }

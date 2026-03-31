@@ -47,6 +47,15 @@ const TensorRecord& ManifestData::FindTensor(const std::string& name) const {
     throw std::runtime_error("missing tensor in manifest: " + name);
 }
 
+const TensorRecord* ManifestData::FindTensorIfPresent(const std::string& name) const {
+    for (const TensorRecord& tensor : tensors) {
+        if (tensor.name == name) {
+            return &tensor;
+        }
+    }
+    return nullptr;
+}
+
 ManifestData ManifestLoader::LoadFromFile(const std::string& manifest_path) {
     const JsonValue root = JsonParser::ParseFile(manifest_path);
     const std::filesystem::path manifest_file = std::filesystem::path(manifest_path).lexically_normal();
@@ -88,6 +97,9 @@ DataType ParseDataTypeString(const std::string& dtype_string) {
     }
     if (dtype_string == "int32") {
         return DataType::kInt32;
+    }
+    if (dtype_string == "uint32") {
+        return DataType::kUInt32;
     }
     throw std::runtime_error("unsupported tensor dtype: " + dtype_string);
 }

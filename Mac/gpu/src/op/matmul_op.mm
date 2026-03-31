@@ -4,6 +4,7 @@
 #include "op/matmul_op.h"
 
 #include <algorithm>
+#include <sstream>
 
 #include "buffer/buffer_arena.h"
 #include "metal/command_stream.h"
@@ -12,6 +13,39 @@
 namespace soc::gpu {
 
 namespace {
+
+bool IsSupportedMatMulWeightType(DataType data_type) {
+    return data_type == DataType::kFloat32 || data_type == DataType::kFloat16;
+}
+
+bool ShouldUseDecodeVec4Kernel(const MatMulParams& params,
+                               bool rhs_is_float16,
+                               std::uint32_t inner_dim,
+                               std::uint32_t column_count,
+                               const MatMulExecutionPolicy& policy) {
+    if (!params.decode_mode || !params.transpose_rhs || !policy.use_tiled_kernel) {
+        return false;
+    }
+    if (policy.tile_columns == 0 || policy.tile_columns > 32) {
+        return false;
+    }
+    if (inner_dim < 128 || column_count < 128 || (inner_dim % 4) != 0) {
+        return false;
+    }
+    if (rhs_is_float16) {
+        return true;
+    }
+    return true;
+}
+
+bool IsLmHeadDecode(const MatMulParams& params) {
+    return params.profile_label != nullptr && std::string(params.profile_label) == "LMHeadDecode";
+}
+
+bool UseExperimentalLmHeadKernel() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_LMHEAD_4COL");
+    return value != nullptr && std::string(value) == "1";
+}
 
 struct MetalMatMulParams {
     std::uint32_t row_count;
@@ -44,11 +78,11 @@ bool ValidateMatMulTensors(const DeviceTensor& lhs,
         return false;
     }
     if (lhs.GetDesc().GetDataType() != DataType::kFloat32 ||
-        rhs.GetDesc().GetDataType() != DataType::kFloat32 ||
+        !IsSupportedMatMulWeightType(rhs.GetDesc().GetDataType()) ||
         output.GetDesc().GetDataType() != DataType::kFloat32 ||
         (bias != nullptr && bias->GetDesc().GetDataType() != DataType::kFloat32)) {
         if (error_message != nullptr) {
-            *error_message = "MatMul baseline currently supports float32 tensors only";
+            *error_message = "MatMul expects float32 activations/output, float32 or float16 rhs weights, and float32 bias";
         }
         return false;
     }
@@ -66,7 +100,12 @@ bool ValidateMatMulTensors(const DeviceTensor& lhs,
     const std::size_t rhs_column_count = params != nullptr && params->transpose_rhs ? rhs_shape[0] : rhs_shape[1];
     if (lhs_shape[1] != rhs_inner_dim) {
         if (error_message != nullptr) {
-            *error_message = "MatMul inner dimensions must match";
+            std::ostringstream stream;
+            stream << "MatMul inner dimensions must match (lhs_inner=" << lhs_shape[1]
+                   << ", rhs_inner=" << rhs_inner_dim
+                   << ", rhs_shape=[" << rhs_shape[0] << "," << rhs_shape[1] << "]"
+                   << ", transpose_rhs=" << (params != nullptr && params->transpose_rhs) << ")";
+            *error_message = stream.str();
         }
         return false;
     }
@@ -144,10 +183,10 @@ MatMulExecutionPolicy MatMulOp::SelectPolicy(const MatMulParams& params,
     if (params.decode_mode) {
         if (column_count <= 4) {
             policy.threadgroup_width = std::max<std::uint32_t>(1, column_count);
-        } else if (inner_dim >= 128 || column_count >= 16) {
-            policy.threadgroup_width = std::min<std::uint32_t>(16, std::max<std::uint32_t>(1, column_count));
+        } else if (inner_dim >= 128 || column_count >= 32) {
+            policy.threadgroup_width = std::min<std::uint32_t>(32, std::max<std::uint32_t>(1, column_count));
         } else {
-            policy.threadgroup_width = std::min<std::uint32_t>(8, std::max<std::uint32_t>(1, column_count));
+            policy.threadgroup_width = std::min<std::uint32_t>(16, std::max<std::uint32_t>(1, column_count));
         }
         policy.threadgroup_height = 1;
         policy.tile_columns = policy.threadgroup_width;
@@ -258,8 +297,7 @@ bool MatMulOp::Run(const MetalContext& context,
         }
         return false;
     }
-
-    const MatMulExecutionPolicy policy = SelectPolicy(params, row_count, column_count, inner_dim);
+    MatMulExecutionPolicy policy = SelectPolicy(params, row_count, column_count, inner_dim);
     if (policy.threadgroup_width == 0 || policy.threadgroup_height == 0 || policy.tile_columns == 0 ||
         policy.tile_rows == 0) {
         if (error_message != nullptr) {
@@ -267,13 +305,32 @@ bool MatMulOp::Run(const MetalContext& context,
         }
         return false;
     }
-
     KernelKey key;
     key.kind = KernelKind::kMatMul;
+    const bool rhs_is_float16 = rhs.GetDesc().GetDataType() == DataType::kFloat16;
+    const bool use_lmhead_kernel =
+        UseExperimentalLmHeadKernel() && params.decode_mode && IsLmHeadDecode(params) && params.transpose_rhs && inner_dim >= 128;
+    if (use_lmhead_kernel) {
+        policy.threadgroup_width = 32;
+        policy.threadgroup_height = 1;
+        policy.tile_columns = 128;
+        policy.tile_rows = 1;
+        policy.use_tiled_kernel = true;
+    }
+    const bool use_decode_vec4_kernel =
+        !use_lmhead_kernel && ShouldUseDecodeVec4Kernel(params, rhs_is_float16, inner_dim, column_count, policy);
     if (policy.use_tiled_kernel) {
-        key.function_name = params.decode_mode ? "matmul_f32_decode_tiled" : "matmul_f32_tiled";
+        key.function_name = params.decode_mode
+            ? (rhs_is_float16
+                  ? (use_lmhead_kernel
+                        ? "matmul_f32_f16rhs_decode_lmhead_vec4"
+                        : (use_decode_vec4_kernel ? "matmul_f32_f16rhs_decode_tiled_vec4" : "matmul_f32_f16rhs_decode_tiled"))
+                  : (use_lmhead_kernel
+                        ? "matmul_f32_decode_lmhead_vec4"
+                        : (use_decode_vec4_kernel ? "matmul_f32_decode_tiled_vec4" : "matmul_f32_decode_tiled")))
+            : (rhs_is_float16 ? "matmul_f32_f16rhs_tiled" : "matmul_f32_tiled");
     } else {
-        key.function_name = "matmul_f32_basic";
+        key.function_name = rhs_is_float16 ? "matmul_f32_f16rhs_basic" : "matmul_f32_basic";
     }
     key.threadgroup_width = policy.threadgroup_width;
     key.threadgroup_height = policy.threadgroup_height;
@@ -364,8 +421,11 @@ bool MatMulOp::Run(const MetalContext& context,
             stream->EndEncoder();
         } else {
             [encoder endEncoding];
+            const char* profile_label = params.profile_label == nullptr ? "MatMul" : params.profile_label;
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "MatMul command buffer failed",
+                                               profile_label,
+                                               1,
                                                error_message)) {
                 return false;
             }

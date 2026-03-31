@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 
 #include "buffer/buffer_arena.h"
 #include "buffer/metal_buffer.h"
@@ -11,6 +12,11 @@
 namespace soc::gpu {
 
 namespace {
+
+bool UseExperimentalGpuSampler() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_GPU_SAMPLER");
+    return value != nullptr && std::string(value) == "1";
+}
 
 bool SampleFromLogitsCpuFallback(const DeviceTensor& logits,
                                  std::size_t row_index,
@@ -52,6 +58,37 @@ bool SampleFromLogitsCpuFallback(const DeviceTensor& logits,
     return true;
 }
 
+bool EnsureTopKBuffers(const MetalContext& context,
+                       std::size_t top_k,
+                       std::shared_ptr<MetalBuffer>* top_values_buffer,
+                       std::shared_ptr<MetalBuffer>* top_indices_buffer,
+                       std::string* error_message) {
+    if (top_values_buffer == nullptr || top_indices_buffer == nullptr) {
+        if (error_message != nullptr) {
+            *error_message = "Sampler buffer outputs must not be null";
+        }
+        return false;
+    }
+
+    const std::size_t values_bytes = sizeof(float) * top_k;
+    if (*top_values_buffer == nullptr || (*top_values_buffer)->GetSizeBytes() < values_bytes) {
+        *top_values_buffer = MetalBuffer::CreateShared(context, values_bytes, "sampler_top_values", error_message);
+        if (*top_values_buffer == nullptr) {
+            return false;
+        }
+    }
+
+    const std::size_t indices_bytes = sizeof(std::int32_t) * top_k;
+    if (*top_indices_buffer == nullptr || (*top_indices_buffer)->GetSizeBytes() < indices_bytes) {
+        *top_indices_buffer = MetalBuffer::CreateShared(context, indices_bytes, "sampler_top_indices", error_message);
+        if (*top_indices_buffer == nullptr) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 }  // namespace
 
 Sampler::Sampler(SamplerConfig config) : config_(config) {}
@@ -88,7 +125,13 @@ bool Sampler::SampleFromLogits(const MetalContext& context,
     const std::size_t vocab_size = logits.GetDesc().GetShape()[1];
     const std::size_t top_k = std::max<std::size_t>(1, std::min<std::size_t>(config_.top_k, vocab_size));
 
-    if (pipeline_cache == nullptr || top_k > SamplerTopKParams::kMaxTopK) {
+    // The current GPU top-k kernel is a single-row scalar scan and measured
+    // substantially slower than reading logits back to CPU on Apple M4.
+    const bool should_use_cpu_sampler =
+        pipeline_cache == nullptr ||
+        top_k > SamplerTopKParams::kMaxTopK ||
+        !UseExperimentalGpuSampler();
+    if (should_use_cpu_sampler) {
         return SampleFromLogitsCpuFallback(logits,
                                            row_index,
                                            top_k,
@@ -98,16 +141,18 @@ bool Sampler::SampleFromLogits(const MetalContext& context,
                                            error_message);
     }
 
-    auto top_values_buffer = MetalBuffer::CreateShared(context, sizeof(float) * top_k, "sampler_top_values", error_message);
-    auto top_indices_buffer = MetalBuffer::CreateShared(context, sizeof(std::int32_t) * top_k, "sampler_top_indices", error_message);
-    if (top_values_buffer == nullptr || top_indices_buffer == nullptr) {
+    if (!EnsureTopKBuffers(context,
+                           top_k,
+                           &top_values_buffer_,
+                           &top_indices_buffer_,
+                           error_message)) {
         return false;
     }
 
-    const DeviceTensor top_values_tensor(top_values_buffer,
+    const DeviceTensor top_values_tensor(top_values_buffer_,
                                          0,
                                          TensorDesc::CreateContiguous(DataType::kFloat32, {1, top_k}));
-    const DeviceTensor top_indices_tensor(top_indices_buffer,
+    const DeviceTensor top_indices_tensor(top_indices_buffer_,
                                           0,
                                           TensorDesc::CreateContiguous(DataType::kInt32, {1, top_k}));
     SamplerTopKParams params;
@@ -131,8 +176,8 @@ bool Sampler::SampleFromLogits(const MetalContext& context,
 
     std::vector<float> reduced_logits(top_k, 0.0f);
     std::vector<std::int32_t> reduced_indices(top_k, -1);
-    if (!top_values_buffer->Read(reduced_logits.data(), sizeof(float) * top_k, 0, error_message) ||
-        !top_indices_buffer->Read(reduced_indices.data(), sizeof(std::int32_t) * top_k, 0, error_message)) {
+    if (!top_values_buffer_->Read(reduced_logits.data(), sizeof(float) * top_k, 0, error_message) ||
+        !top_indices_buffer_->Read(reduced_indices.data(), sizeof(std::int32_t) * top_k, 0, error_message)) {
         return false;
     }
 

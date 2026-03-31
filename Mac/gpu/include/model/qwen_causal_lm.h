@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "module/qwen_block.h"
+#include "op/affine_qmm_op.h"
 #include "runtime/kv_cache.h"
 #include "tensor/device_tensor.h"
 
@@ -19,6 +20,8 @@ struct QwenCausalLMWeights {
     std::vector<QwenBlockWeights> blocks;
     DeviceTensor final_norm_weight;
     DeviceTensor lm_head_weight;
+    AffineQmmWeight lm_head_q4_weight;
+    bool has_quantized_lm_head = false;
     bool tie_word_embeddings = true;
 };
 

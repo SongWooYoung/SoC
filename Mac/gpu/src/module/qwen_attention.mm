@@ -8,6 +8,7 @@
 #include "buffer/buffer_arena.h"
 #include "metal/command_stream.h"
 #include "metal/metal_context.h"
+#include "op/affine_qmm_op.h"
 #include "op/linear_op.h"
 #include "op/rms_norm_op.h"
 #include "op/rope_op.h"
@@ -15,6 +16,20 @@
 
 namespace soc::gpu {
 namespace {
+
+bool IsProjectionWeightType(DataType data_type) {
+    return data_type == DataType::kFloat32 || data_type == DataType::kFloat16;
+}
+
+bool UseExperimentalQ4Decode() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_Q4_DECODE");
+    return value != nullptr && std::string(value) == "1";
+}
+
+bool UseExperimentalSafeDecodeBatch() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_SAFE_DECODE_BATCH");
+    return value != nullptr && std::string(value) == "1";
+}
 
 struct MetalAttentionScoreParams {
     std::uint32_t query_row_count;
@@ -106,14 +121,14 @@ bool ValidateAttentionIO(const DeviceTensor& input,
         return false;
     }
     if (input.GetDesc().GetDataType() != DataType::kFloat32 || output.GetDesc().GetDataType() != DataType::kFloat32 ||
-        weights.q_proj_weight.GetDesc().GetDataType() != DataType::kFloat32 ||
-        weights.k_proj_weight.GetDesc().GetDataType() != DataType::kFloat32 ||
-        weights.v_proj_weight.GetDesc().GetDataType() != DataType::kFloat32 ||
-        weights.o_proj_weight.GetDesc().GetDataType() != DataType::kFloat32 ||
+        !IsProjectionWeightType(weights.q_proj_weight.GetDesc().GetDataType()) ||
+        !IsProjectionWeightType(weights.k_proj_weight.GetDesc().GetDataType()) ||
+        !IsProjectionWeightType(weights.v_proj_weight.GetDesc().GetDataType()) ||
+        !IsProjectionWeightType(weights.o_proj_weight.GetDesc().GetDataType()) ||
         weights.q_norm_weight.GetDesc().GetDataType() != DataType::kFloat32 ||
         weights.k_norm_weight.GetDesc().GetDataType() != DataType::kFloat32) {
         if (error_message != nullptr) {
-            *error_message = "QwenAttention baseline currently supports float32 tensors only";
+            *error_message = "QwenAttention expects float32 activations/norm weights and float32 or float16 projection weights";
         }
         return false;
     }
@@ -176,6 +191,63 @@ bool ValidateAttentionIO(const DeviceTensor& input,
     *query_hidden_size = inferred_query_hidden;
     *key_value_hidden_size = inferred_key_value_hidden;
     return true;
+}
+
+bool RunDecodeProjection(const MetalContext& context,
+                         PipelineCache* pipeline_cache,
+                         const DeviceTensor& input,
+                         const DeviceTensor* residual,
+                         const DeviceTensor& dense_weight,
+                         const AffineQmmWeight& q4_weight,
+                         const char* dense_label,
+                         const char* q4_label,
+                         std::size_t inner_dim,
+                         std::size_t column_count,
+                         bool add_residual,
+                         const DeviceTensor& output,
+                         BufferArena* temporary_arena,
+                         CommandStream* stream,
+                         std::string* error_message) {
+    const bool use_q4 = input.GetDesc().GetShape()[0] == 1 && UseExperimentalQ4Decode() && q4_weight.IsValid();
+    if (use_q4) {
+        AffineQmmParams qmm_params;
+        qmm_params.row_count = 1;
+        qmm_params.inner_dim = static_cast<std::uint32_t>(inner_dim);
+        qmm_params.column_count = static_cast<std::uint32_t>(column_count);
+        qmm_params.output_row_stride = static_cast<std::uint32_t>(column_count);
+        qmm_params.add_residual = add_residual;
+        qmm_params.profile_label = q4_label;
+        return AffineQmmOp::Run(context,
+                                pipeline_cache,
+                                input,
+                                q4_weight,
+                                residual,
+                                output,
+                                qmm_params,
+                                temporary_arena,
+                                stream,
+                                error_message);
+    }
+
+    LinearParams params;
+    params.add_residual = add_residual;
+    params.matmul.row_count = 1;
+    params.matmul.inner_dim = static_cast<std::uint32_t>(inner_dim);
+    params.matmul.column_count = static_cast<std::uint32_t>(column_count);
+    params.matmul.profile_label = dense_label;
+    params.matmul.decode_mode = true;
+    params.matmul.transpose_rhs = true;
+    return LinearOp::Run(context,
+                         pipeline_cache,
+                         input,
+                         dense_weight,
+                         nullptr,
+                         residual,
+                         output,
+                         params,
+                         temporary_arena,
+                         stream,
+                         error_message);
 }
 
 bool DispatchAttentionScores(const MetalContext& context,
@@ -245,6 +317,8 @@ bool DispatchAttentionScores(const MetalContext& context,
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "Attention score command buffer failed",
+                                               "AttentionScore",
+                                               1,
                                                error_message)) {
                 return false;
             }
@@ -321,6 +395,8 @@ bool DispatchAttentionValues(const MetalContext& context,
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "Attention value command buffer failed",
+                                               "AttentionValue",
+                                               1,
                                                error_message)) {
                 return false;
             }
@@ -491,6 +567,9 @@ bool RunAttentionInternal(const MetalContext& context,
     }
 
     BufferArenaMarkGuard arena_mark(temporary_arena, "QwenAttention");
+    CommandStream local_stream;
+    CommandStream* active_stream = stream;
+    const bool use_local_decode_batch = decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch();
 
     const std::size_t rotary_dim = params.rotary_dim == 0 ? params.head_dim : params.rotary_dim;
     const TensorDesc query_desc = TensorDesc::CreateContiguous(DataType::kFloat32, {row_count, query_hidden_size});
@@ -516,51 +595,113 @@ bool RunAttentionInternal(const MetalContext& context,
         return false;
     }
 
-    LinearParams q_params;
-    q_params.matmul.row_count = static_cast<std::uint32_t>(row_count);
-    q_params.matmul.inner_dim = static_cast<std::uint32_t>(hidden_size);
-    q_params.matmul.column_count = static_cast<std::uint32_t>(query_hidden_size);
-    q_params.matmul.decode_mode = decode_mode;
-    q_params.matmul.transpose_rhs = true;
-    if (!LinearOp::Run(context,
-                       pipeline_cache,
-                       input,
-                       weights.q_proj_weight,
-                       nullptr,
-                       nullptr,
-                       query_proj,
-                       q_params,
-                       temporary_arena,
-                       stream,
-                       error_message)) {
-        return false;
+    if (use_local_decode_batch) {
+        if (!local_stream.Begin(context, error_message)) {
+            return false;
+        }
+        active_stream = &local_stream;
     }
 
-    LinearParams k_params = q_params;
-    k_params.matmul.column_count = static_cast<std::uint32_t>(key_value_hidden_size);
-    if (!LinearOp::Run(context,
-                       pipeline_cache,
-                       input,
-                       weights.k_proj_weight,
-                       nullptr,
-                       nullptr,
-                       key_proj,
-                       k_params,
-                       temporary_arena,
-                       stream,
-                       error_message) ||
-        !LinearOp::Run(context,
-                       pipeline_cache,
-                       input,
-                       weights.v_proj_weight,
-                       nullptr,
-                       nullptr,
-                       value_proj,
-                       k_params,
-                       temporary_arena,
-                       stream,
-                       error_message)) {
-        return false;
+    if (decode_mode) {
+        if (!RunDecodeProjection(context,
+                                 pipeline_cache,
+                                 input,
+                                 nullptr,
+                                 weights.q_proj_weight,
+                                 weights.q_proj_q4_weight,
+                                 "QProjDecode",
+                                 "QProjDecodeQ4",
+                                 hidden_size,
+                                 query_hidden_size,
+                                 false,
+                                 query_proj,
+                                 temporary_arena,
+                                 active_stream,
+                                 error_message) ||
+            !RunDecodeProjection(context,
+                                 pipeline_cache,
+                                 input,
+                                 nullptr,
+                                 weights.k_proj_weight,
+                                 weights.k_proj_q4_weight,
+                                 "KProjDecode",
+                                 "KProjDecodeQ4",
+                                 hidden_size,
+                                 key_value_hidden_size,
+                                 false,
+                                 key_proj,
+                                 temporary_arena,
+                                 active_stream,
+                                 error_message) ||
+            !RunDecodeProjection(context,
+                                 pipeline_cache,
+                                 input,
+                                 nullptr,
+                                 weights.v_proj_weight,
+                                 weights.v_proj_q4_weight,
+                                 "VProjDecode",
+                                 "VProjDecodeQ4",
+                                 hidden_size,
+                                 key_value_hidden_size,
+                                 false,
+                                 value_proj,
+                                 temporary_arena,
+                                 active_stream,
+                                 error_message)) {
+            return false;
+        }
+    } else {
+        LinearParams q_params;
+        q_params.matmul.row_count = static_cast<std::uint32_t>(row_count);
+        q_params.matmul.inner_dim = static_cast<std::uint32_t>(hidden_size);
+        q_params.matmul.column_count = static_cast<std::uint32_t>(query_hidden_size);
+        q_params.matmul.profile_label = "QProjPrefill";
+        q_params.matmul.decode_mode = false;
+        q_params.matmul.transpose_rhs = true;
+        if (!LinearOp::Run(context,
+                           pipeline_cache,
+                           input,
+                           weights.q_proj_weight,
+                           nullptr,
+                           nullptr,
+                           query_proj,
+                           q_params,
+                           temporary_arena,
+                           active_stream,
+                           error_message)) {
+            return false;
+        }
+
+        LinearParams k_params = q_params;
+        k_params.matmul.column_count = static_cast<std::uint32_t>(key_value_hidden_size);
+        k_params.matmul.profile_label = "KProjPrefill";
+        if (!LinearOp::Run(context,
+                           pipeline_cache,
+                           input,
+                           weights.k_proj_weight,
+                           nullptr,
+                           nullptr,
+                           key_proj,
+                           k_params,
+                           temporary_arena,
+                           active_stream,
+                           error_message)) {
+            return false;
+        }
+        k_params.matmul.profile_label = "VProjPrefill";
+        if (!LinearOp::Run(context,
+                           pipeline_cache,
+                           input,
+                           weights.v_proj_weight,
+                           nullptr,
+                           nullptr,
+                           value_proj,
+                           k_params,
+                           temporary_arena,
+                           active_stream,
+                           error_message)) {
+            return false;
+        }
     }
 
     const DeviceTensor query_heads(query_norm.GetBuffer(),
@@ -591,7 +732,7 @@ bool RunAttentionInternal(const MetalContext& context,
                         query_heads,
                         q_norm_params,
                         temporary_arena,
-                        stream,
+                        active_stream,
                         error_message)) {
         return false;
     }
@@ -607,7 +748,7 @@ bool RunAttentionInternal(const MetalContext& context,
                         key_heads,
                         k_norm_params,
                         temporary_arena,
-                        stream,
+                        active_stream,
                         error_message)) {
         return false;
     }
@@ -625,7 +766,7 @@ bool RunAttentionInternal(const MetalContext& context,
                      query_rope,
                      q_rope_params,
                      temporary_arena,
-                     stream,
+                     active_stream,
                      error_message)) {
         return false;
     }
@@ -638,9 +779,16 @@ bool RunAttentionInternal(const MetalContext& context,
                      key_rope,
                      k_rope_params,
                      temporary_arena,
-                     stream,
+                     active_stream,
                      error_message)) {
         return false;
+    }
+
+    if (use_local_decode_batch) {
+        if (!local_stream.Flush(context, "DecodeAttnPrepBatch", error_message)) {
+            return false;
+        }
+        active_stream = nullptr;
     }
 
     std::size_t sequence_length_before_append = 0;
@@ -651,11 +799,11 @@ bool RunAttentionInternal(const MetalContext& context,
         const KVCacheLayerView existing_view = kv_cache->ViewForLayer(layer_index);
         sequence_length_before_append = existing_view.sequence_length;
         if (decode_mode) {
-            if (!kv_cache->AppendDecodeToken(context, layer_index, key_rope, value_proj, stream, error_message)) {
+            if (!kv_cache->AppendDecodeToken(context, layer_index, key_rope, value_proj, active_stream, error_message)) {
                 return false;
             }
         } else {
-            if (!kv_cache->AppendPrefill(context, layer_index, key_rope, value_proj, stream, error_message)) {
+            if (!kv_cache->AppendPrefill(context, layer_index, key_rope, value_proj, active_stream, error_message)) {
                 return false;
             }
         }
@@ -682,6 +830,12 @@ bool RunAttentionInternal(const MetalContext& context,
     score_params.query_position_base = static_cast<std::uint32_t>(sequence_length_before_append);
     score_params.causal_mask = 1;
     score_params.scale = 1.0f / std::sqrt(static_cast<float>(params.head_dim));
+    if (use_local_decode_batch) {
+        if (!local_stream.Begin(context, error_message)) {
+            return false;
+        }
+        active_stream = &local_stream;
+    }
     if (!DispatchAttentionScores(context,
                                  pipeline_cache,
                                  query_rope,
@@ -689,7 +843,7 @@ bool RunAttentionInternal(const MetalContext& context,
                                  attention_scores,
                                  score_params,
                                  temporary_arena,
-                                 stream,
+                                 active_stream,
                                  error_message)) {
         return false;
     }
@@ -703,7 +857,7 @@ bool RunAttentionInternal(const MetalContext& context,
                         attention_probs,
                         softmax_params,
                         temporary_arena,
-                        stream,
+                        active_stream,
                         error_message)) {
         return false;
     }
@@ -722,30 +876,57 @@ bool RunAttentionInternal(const MetalContext& context,
                                  attention_context,
                                  value_params,
                                  temporary_arena,
-                                 stream,
+                                 active_stream,
                                  error_message)) {
         return false;
     }
 
-    LinearParams o_params;
-    o_params.add_residual = params.add_residual;
-    o_params.matmul.row_count = static_cast<std::uint32_t>(row_count);
-    o_params.matmul.inner_dim = static_cast<std::uint32_t>(query_hidden_size);
-    o_params.matmul.column_count = static_cast<std::uint32_t>(hidden_size);
-    o_params.matmul.decode_mode = row_count == 1;
-    o_params.matmul.transpose_rhs = true;
-    if (!LinearOp::Run(context,
-                       pipeline_cache,
-                       attention_context,
-                       weights.o_proj_weight,
-                       nullptr,
-                       params.add_residual ? (residual == nullptr ? &input : residual) : nullptr,
-                       output,
-                       o_params,
-                       temporary_arena,
-                       stream,
-                       error_message)) {
-        return false;
+    if (decode_mode) {
+        if (!RunDecodeProjection(context,
+                                 pipeline_cache,
+                                 attention_context,
+                                 params.add_residual ? (residual == nullptr ? &input : residual) : nullptr,
+                                 weights.o_proj_weight,
+                                 weights.o_proj_q4_weight,
+                                 "OProjDecode",
+                                 "OProjDecodeQ4",
+                                 query_hidden_size,
+                                 hidden_size,
+                                 params.add_residual,
+                                 output,
+                                 temporary_arena,
+                                 active_stream,
+                                 error_message)) {
+            return false;
+        }
+    } else {
+        LinearParams o_params;
+        o_params.add_residual = params.add_residual;
+        o_params.matmul.row_count = static_cast<std::uint32_t>(row_count);
+        o_params.matmul.inner_dim = static_cast<std::uint32_t>(query_hidden_size);
+        o_params.matmul.column_count = static_cast<std::uint32_t>(hidden_size);
+        o_params.matmul.profile_label = "OProjPrefill";
+        o_params.matmul.decode_mode = false;
+        o_params.matmul.transpose_rhs = true;
+        if (!LinearOp::Run(context,
+                           pipeline_cache,
+                           attention_context,
+                           weights.o_proj_weight,
+                           nullptr,
+                           params.add_residual ? (residual == nullptr ? &input : residual) : nullptr,
+                           output,
+                           o_params,
+                           temporary_arena,
+                           active_stream,
+                           error_message)) {
+            return false;
+        }
+    }
+
+    if (use_local_decode_batch) {
+        if (!local_stream.Flush(context, "DecodeAttnContextBatch", error_message)) {
+            return false;
+        }
     }
 
     return true;

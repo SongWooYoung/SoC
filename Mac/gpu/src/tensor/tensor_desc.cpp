@@ -58,6 +58,8 @@ std::size_t GetDataTypeSize(DataType data_type) {
             return sizeof(float);
         case DataType::kInt32:
             return sizeof(std::int32_t);
+        case DataType::kUInt32:
+            return sizeof(std::uint32_t);
     }
     throw std::runtime_error("Unsupported data type");
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,8 @@ public:
 
 private:
     SamplerConfig config_;
+    mutable std::shared_ptr<class MetalBuffer> top_values_buffer_;
+    mutable std::shared_ptr<class MetalBuffer> top_indices_buffer_;
 };
 
 }  // namespace soc::gpu

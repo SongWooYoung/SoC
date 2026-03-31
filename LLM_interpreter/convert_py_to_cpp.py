@@ -80,6 +80,16 @@ def parse_args() -> argparse.Namespace:
 		default="native",
 		help="Target dtype for exported floating-point tensors.",
 	)
+	parser.add_argument(
+		"--metal-quantize-lm-head",
+		action="store_true",
+		help="Export an additional 4-bit affine quantized lm_head copy for experimental Metal qmm decode.",
+	)
+	parser.add_argument(
+		"--metal-quantize-decode-weights",
+		action="store_true",
+		help="Export additional 4-bit affine quantized decode projection copies for experimental Metal qmm decode.",
+	)
 	return parser.parse_args()
 
 
@@ -174,6 +184,127 @@ def convert_tensor_bytes(tensor: Any, export_dtype: str, torch_module: Any) -> t
 
 	converted = tensor.numpy()
 	return converted.tobytes(), original_dtype_name, shape
+
+
+def affine_quantize_tensor(weight: Any, group_size: int, bits: int, torch_module: Any) -> tuple[Any, Any, Any]:
+	weight = weight.detach().contiguous().cpu().to(torch_module.float32)
+	out_dim, inner_dim = weight.shape
+	elems_per_int = 32 // bits
+	max_val = (1 << bits) - 1
+	group_count = inner_dim // group_size
+
+	grouped = weight.reshape(out_dim, group_count, group_size)
+	w_min = grouped.min(dim=-1).values
+	w_max = grouped.max(dim=-1).values
+	scales = ((w_max - w_min) / max_val).clamp(min=1e-8)
+	biases = w_min
+
+	w_int = ((grouped - biases.unsqueeze(-1)) / scales.unsqueeze(-1)).round().clamp(0, max_val).to(torch_module.int32)
+	w_int = w_int.reshape(out_dim, inner_dim)
+
+	k_packed = inner_dim // elems_per_int
+	w_packed = torch_module.zeros(out_dim, k_packed, dtype=torch_module.int32)
+	for i in range(elems_per_int):
+		w_packed |= w_int[:, i::elems_per_int] << (bits * i)
+
+	return w_packed.to(torch_module.uint32), scales.to(torch_module.float32), biases.to(torch_module.float32)
+
+
+def build_quantized_tensor_records(
+	tensor_name: str,
+	source_tensor: Any,
+	source_shard: str,
+	weights_dir: Path,
+	torch_module: Any,
+	group_size: int = 128,
+	bits: int = 4,
+) -> list[TensorExportRecord]:
+	w_packed, scales, biases = affine_quantize_tensor(source_tensor, group_size, bits, torch_module)
+	base_name = tensor_name[:-len(".weight")] if tensor_name.endswith(".weight") else tensor_name
+	records: list[TensorExportRecord] = []
+	artifacts = (
+		(f"{base_name}.qweight", w_packed.numpy().tobytes(), "uint32", list(w_packed.shape)),
+		(f"{base_name}.scales", scales.numpy().tobytes(), "float32", list(scales.shape)),
+		(f"{base_name}.qbiases", biases.numpy().tobytes(), "float32", list(biases.shape)),
+	)
+	for artifact_name, tensor_bytes, tensor_dtype, shape in artifacts:
+		file_name = artifact_name.replace(".", "_") + ".bin"
+		destination = weights_dir / file_name
+		destination.write_bytes(tensor_bytes)
+		records.append(
+			TensorExportRecord(
+				name=artifact_name,
+				file=(Path("weights") / file_name).as_posix(),
+				dtype=tensor_dtype,
+				shape=shape,
+				byte_size=len(tensor_bytes),
+				source_shard=source_shard,
+			)
+		)
+	return records
+
+
+def export_quantized_lm_head(
+	model_dir: Path,
+	weights_dir: Path,
+	torch_module: Any,
+	safe_open_fn: Any,
+	group_size: int = 128,
+	bits: int = 4,
+) -> list[TensorExportRecord]:
+	source_tensor_name = None
+	source_tensor = None
+	for candidate_name in ("lm_head.weight", "model.embed_tokens.weight"):
+		for shard_path in discover_safetensor_files(model_dir):
+			with safe_open_fn(str(shard_path), framework="pt", device="cpu") as handle:
+				if candidate_name in handle.keys():
+					source_tensor_name = candidate_name
+					source_tensor = handle.get_tensor(candidate_name)
+					source_shard = shard_path.name
+					break
+		if source_tensor is not None:
+			break
+
+	if source_tensor is None:
+		return []
+
+	return build_quantized_tensor_records("lm_head.weight", source_tensor, source_shard, weights_dir, torch_module, group_size, bits)
+
+
+def should_quantize_decode_weight(tensor_name: str) -> bool:
+	return (
+		re.fullmatch(r"model\.layers\.\d+\.self_attn\.(q_proj|k_proj|v_proj|o_proj)\.weight", tensor_name) is not None
+		or re.fullmatch(r"model\.layers\.\d+\.mlp\.(gate_proj|up_proj|down_proj)\.weight", tensor_name) is not None
+	)
+
+
+def export_quantized_decode_weights(
+	model_dir: Path,
+	weights_dir: Path,
+	torch_module: Any,
+	safe_open_fn: Any,
+	group_size: int = 128,
+	bits: int = 4,
+) -> list[TensorExportRecord]:
+	records: list[TensorExportRecord] = []
+	for shard_path in discover_safetensor_files(model_dir):
+		with safe_open_fn(str(shard_path), framework="pt", device="cpu") as handle:
+			for tensor_name in handle.keys():
+				if not should_quantize_decode_weight(tensor_name):
+					continue
+				source_tensor = handle.get_tensor(tensor_name)
+				records.extend(
+					build_quantized_tensor_records(
+						tensor_name=tensor_name,
+						source_tensor=source_tensor,
+						source_shard=shard_path.name,
+						weights_dir=weights_dir,
+						torch_module=torch_module,
+						group_size=group_size,
+						bits=bits,
+					)
+				)
+	return records
 
 
 def copy_tokenizer_assets(model_dir: Path, tokenizer_dir: Path, auto_tokenizer_cls: Any) -> list[str]:
@@ -509,6 +640,8 @@ def export_hf_checkpoint_for_cpp(
 	output_dir: Path,
 	export_dtype: str = "native",
 	model_id: str | None = None,
+	metal_quantize_lm_head: bool = False,
+	metal_quantize_decode_weights: bool = False,
 ) -> Path:
 	torch_module, safe_open_fn, auto_tokenizer_cls = load_export_dependencies()
 
@@ -526,6 +659,10 @@ def export_hf_checkpoint_for_cpp(
 	tokenizer_runtime_file = write_tokenizer_runtime(tokenizer_dir, tokenizer_runtime)
 	tokenizer_manifest["runtime_file"] = tokenizer_runtime_file
 	tensor_records = export_weights(model_dir, weights_dir, export_dtype, torch_module, safe_open_fn)
+	if metal_quantize_lm_head:
+		tensor_records.extend(export_quantized_lm_head(model_dir, weights_dir, torch_module, safe_open_fn))
+	if metal_quantize_decode_weights:
+		tensor_records.extend(export_quantized_decode_weights(model_dir, weights_dir, torch_module, safe_open_fn))
 
 	config = load_json_if_exists(model_dir / "config.json")
 	generation_config = load_json_if_exists(model_dir / "generation_config.json")
@@ -558,6 +695,8 @@ def main() -> None:
 		output_dir=args.output_dir,
 		export_dtype=args.dtype,
 		model_id=args.model_id,
+		metal_quantize_lm_head=args.metal_quantize_lm_head,
+		metal_quantize_decode_weights=args.metal_quantize_decode_weights,
 	)
 	print(f"C++ export written to {manifest_path.parent}")
 	print(f"Manifest: {manifest_path}")

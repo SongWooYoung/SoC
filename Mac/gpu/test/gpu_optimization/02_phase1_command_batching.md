@@ -43,6 +43,18 @@ Created `include/metal/command_stream.h` + `src/metal/command_stream.mm`:
 - With batching, 7 matmuls should take ~1.8ms
 - 28 layers × 1.8ms = ~50ms → ~20 tok/s (still need float16 for 100)
 
+## 2026-03-31 Safety Correction
+
+위 수치는 `microbenchmark` 관점에서는 유효했지만, 실기기 end-to-end decode에 그대로 확대 적용하면 안 됐다. Mac mini M4 32GB에서는 `full decode step` 또는 `multi-layer range`를 하나의 giant command buffer로 묶는 방식이 `WindowServer` fault를 유발했다.
+
+따라서 현재 해석은 다음으로 수정한다.
+
+1. batching은 유효한 최적화 수단이다.
+2. 하지만 granularity가 너무 크면 unsafe하다.
+3. 재도입은 `layer` 또는 그보다 작은 bounded batching부터 해야 한다.
+
+상세한 재현 조건과 현재 정책은 `Mac/gpu/plan/13_GPU_FAULT_POSTMORTEM.md`와 `Mac/gpu/test/errors/01_windowserver_gpu_fault.md`를 따른다.
+
 ## Next Steps
 1. Integrate CommandStream into all Op::Run() methods (optional parameter)
 2. Use CommandStream in QwenBlock::RunDecode() for full decode batching

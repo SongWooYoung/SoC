@@ -4,6 +4,7 @@
 #include <string>
 
 #include "kernel/pipeline_cache.h"
+#include "op/affine_qmm_op.h"
 #include "tensor/device_tensor.h"
 
 namespace soc::gpu {
@@ -14,8 +15,11 @@ class MetalContext;
 
 struct QwenMlpWeights {
     DeviceTensor gate_proj_weight;
+    AffineQmmWeight gate_proj_q4_weight;
     DeviceTensor up_proj_weight;
+    AffineQmmWeight up_proj_q4_weight;
     DeviceTensor down_proj_weight;
+    AffineQmmWeight down_proj_q4_weight;
 };
 
 struct QwenMlpParams {

@@ -28,6 +28,7 @@ struct BenchmarkScenario {
     std::size_t inner_dim;
     std::size_t cols;
     bool decode_mode;
+    bool transpose_rhs;
     bool use_bias;
     bool add_residual;
     bool enable_silu;
@@ -54,6 +55,23 @@ std::vector<float> MakeData(std::size_t count, float scale) {
         values[index] = ComputeValue(index, scale);
     }
     return values;
+}
+
+std::vector<float> MakeLogicalRhs(const BenchmarkScenario& scenario) {
+    return MakeData(scenario.inner_dim * scenario.cols, 1.0f / 53.0f);
+}
+
+std::vector<float> MakeStoredRhs(const BenchmarkScenario& scenario, const std::vector<float>& logical_rhs) {
+    if (!scenario.transpose_rhs) {
+        return logical_rhs;
+    }
+    std::vector<float> stored(logical_rhs.size(), 0.0f);
+    for (std::size_t inner = 0; inner < scenario.inner_dim; ++inner) {
+        for (std::size_t col = 0; col < scenario.cols; ++col) {
+            stored[col * scenario.inner_dim + inner] = logical_rhs[inner * scenario.cols + col];
+        }
+    }
+    return stored;
 }
 
 std::vector<float> ComputeReference(const BenchmarkScenario& scenario,
@@ -100,10 +118,11 @@ bool RunScenario(const BenchmarkScenario& scenario,
                  soc::gpu::BufferArena* arena,
                  std::string* error_message) {
     const auto lhs = MakeData(scenario.rows * scenario.inner_dim, 1.0f / 37.0f);
-    const auto rhs = MakeData(scenario.inner_dim * scenario.cols, 1.0f / 53.0f);
+    const auto logical_rhs = MakeLogicalRhs(scenario);
+    const auto rhs = MakeStoredRhs(scenario, logical_rhs);
     const auto bias = MakeData(scenario.cols, 1.0f / 71.0f);
     const auto residual = MakeData(scenario.rows * scenario.cols, 1.0f / 61.0f);
-    const auto reference = ComputeReference(scenario, lhs, rhs, bias, residual);
+    const auto reference = ComputeReference(scenario, lhs, logical_rhs, bias, residual);
 
     auto lhs_buffer = soc::gpu::MetalBuffer::CreateShared(context, sizeof(float) * lhs.size(), "bench_lhs", error_message);
     auto rhs_buffer = soc::gpu::MetalBuffer::CreateShared(context, sizeof(float) * rhs.size(), "bench_rhs", error_message);
@@ -122,7 +141,10 @@ bool RunScenario(const BenchmarkScenario& scenario,
     const soc::gpu::TensorDesc lhs_desc =
         soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, {scenario.rows, scenario.inner_dim});
     const soc::gpu::TensorDesc rhs_desc =
-        soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, {scenario.inner_dim, scenario.cols});
+        soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32,
+                                               scenario.transpose_rhs
+                                                   ? std::vector<std::size_t>{scenario.cols, scenario.inner_dim}
+                                                   : std::vector<std::size_t>{scenario.inner_dim, scenario.cols});
     const soc::gpu::TensorDesc bias_desc =
         soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, {scenario.cols});
     const soc::gpu::TensorDesc output_desc =
@@ -145,6 +167,7 @@ bool RunScenario(const BenchmarkScenario& scenario,
         params.matmul.column_count = static_cast<std::uint32_t>(scenario.cols);
         params.matmul.use_bias = scenario.use_bias;
         params.matmul.decode_mode = scenario.decode_mode;
+        params.matmul.transpose_rhs = scenario.transpose_rhs;
         params.matmul.enable_silu = scenario.enable_silu;
         params.matmul.add_residual = scenario.add_residual;
         params.activation = scenario.enable_silu ? soc::gpu::LinearActivation::kSiLU : soc::gpu::LinearActivation::kNone;
@@ -205,6 +228,7 @@ bool RunScenario(const BenchmarkScenario& scenario,
 
     std::cout << "scenario=" << scenario.name << " rows=" << scenario.rows << " inner=" << scenario.inner_dim
               << " cols=" << scenario.cols << " decode=" << (scenario.decode_mode ? "true" : "false")
+              << " transpose_rhs=" << (scenario.transpose_rhs ? "true" : "false")
               << " fused_bias=" << (scenario.use_bias ? "true" : "false")
               << " fused_residual=" << (scenario.add_residual ? "true" : "false")
               << " fused_silu=" << (scenario.enable_silu ? "true" : "false") << '\n';
@@ -238,9 +262,11 @@ int main() {
     }
 
     const std::vector<BenchmarkScenario> scenarios = {
-        {"decode_1x512x512", 1, 512, 512, true, true, false, false, 5, 20, {{4, 1}, {8, 1}, {16, 1}, {32, 1}}},
-        {"prefill_8x512x512", 8, 512, 512, false, true, false, false, 5, 20, {{4, 2}, {8, 2}, {8, 4}, {16, 4}}},
-        {"fused_linear_32x256x1024", 32, 256, 1024, false, true, true, true, 3, 10, {{4, 2}, {8, 2}, {8, 4}, {16, 4}}},
+        {"decode_1x1024x1024_transposed", 1, 1024, 1024, true, true, true, false, false, 5, 30, {{8, 1}, {16, 1}, {32, 1}}},
+        {"decode_1x1024x1024_contiguous", 1, 1024, 1024, true, false, true, false, false, 5, 30, {{8, 1}, {16, 1}, {32, 1}}},
+        {"decode_1x1024x2816_transposed", 1, 1024, 2816, true, true, true, false, false, 5, 30, {{8, 1}, {16, 1}, {32, 1}}},
+        {"decode_1x1024x2816_contiguous", 1, 1024, 2816, true, false, true, false, false, 5, 30, {{8, 1}, {16, 1}, {32, 1}}},
+        {"prefill_8x512x512_transposed", 8, 512, 512, false, true, true, false, false, 5, 20, {{4, 2}, {8, 2}, {8, 4}, {16, 4}}},
     };
 
     for (const BenchmarkScenario& scenario : scenarios) {

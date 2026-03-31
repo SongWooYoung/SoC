@@ -16,6 +16,7 @@ struct MatMulParams {
     std::uint32_t row_count = 0;
     std::uint32_t inner_dim = 0;
     std::uint32_t column_count = 0;
+    const char* profile_label = nullptr;
     bool use_bias = false;
     bool decode_mode = false;
     bool transpose_rhs = false;

@@ -19,6 +19,29 @@ bool NearlyEqual(float lhs, float rhs) {
     return std::fabs(lhs - rhs) < 1.0e-4f;
 }
 
+std::uint16_t Float32ToFloat16Bits(float value) {
+    union {
+        float f32;
+        std::uint32_t u32;
+    } bits{value};
+
+    const std::uint32_t sign = (bits.u32 >> 16) & 0x8000u;
+    std::int32_t exponent = static_cast<std::int32_t>((bits.u32 >> 23) & 0xffu) - 127 + 15;
+    std::uint32_t mantissa = bits.u32 & 0x7fffffu;
+
+    if (exponent <= 0) {
+        if (exponent < -10) {
+            return static_cast<std::uint16_t>(sign);
+        }
+        mantissa = (mantissa | 0x800000u) >> (1 - exponent);
+        return static_cast<std::uint16_t>(sign | ((mantissa + 0x1000u) >> 13));
+    }
+    if (exponent >= 31) {
+        return static_cast<std::uint16_t>(sign | 0x7c00u);
+    }
+    return static_cast<std::uint16_t>(sign | (static_cast<std::uint32_t>(exponent) << 10) | ((mantissa + 0x1000u) >> 13));
+}
+
 std::vector<float> ComputeLinearReference(const std::vector<float>& input,
                                           const std::vector<float>& weight,
                                           const std::vector<float>& bias,
@@ -78,6 +101,7 @@ std::vector<float> ComputeRmsNormReference(const std::vector<float>& input,
     return output;
 }
 
+
 bool CheckVector(const std::vector<float>& actual, const std::vector<float>& expected, const std::string& label) {
     for (std::size_t index = 0; index < actual.size(); ++index) {
         if (!NearlyEqual(actual[index], expected[index])) {
@@ -117,22 +141,28 @@ int main() {
     auto residual_buffer = soc::gpu::MetalBuffer::CreateShared(*context, sizeof(float) * 6, "residual", &error_message);
     auto decode_input_buffer = soc::gpu::MetalBuffer::CreateShared(*context, sizeof(float) * 4, "decode_input", &error_message);
     auto decode_output_buffer = soc::gpu::MetalBuffer::CreateShared(*context, sizeof(float) * 3, "decode_out", &error_message);
-    if (input_buffer == nullptr || weight_buffer == nullptr || bias_buffer == nullptr ||
-        linear_output_buffer == nullptr || norm_weight_buffer == nullptr || norm_output_buffer == nullptr || residual_buffer == nullptr ||
-        decode_input_buffer == nullptr || decode_output_buffer == nullptr) {
-        std::cerr << "buffer allocation failed: " << error_message << '\n';
-        return 1;
-    }
-
+    auto f16_output_buffer = soc::gpu::MetalBuffer::CreateShared(*context, sizeof(float) * 6, "linear_out_f16", &error_message);
     const std::vector<float> input = {1.0f, 2.0f, -1.0f, 0.5f, -2.0f, 1.5f, 3.0f, 0.25f};
     const std::vector<float> weight = {0.5f, -1.0f, 2.0f, 1.0f, 0.25f, -0.5f, -1.5f, 0.75f, 1.25f, 2.0f, -0.25f, 0.5f};
     const std::vector<float> bias = {0.1f, -0.2f, 0.3f};
     const std::vector<float> norm_weight = {1.0f, 0.5f, 1.5f};
     const std::vector<float> residual = {0.2f, -0.3f, 0.4f, -0.5f, 0.6f, -0.7f};
     const std::vector<float> decode_input = {1.0f, -1.0f, 0.5f, 2.0f};
-
+    auto f16_weight_buffer = soc::gpu::MetalBuffer::CreateShared(*context, sizeof(std::uint16_t) * weight.size(), "weight_f16", &error_message);
+    if (input_buffer == nullptr || weight_buffer == nullptr || bias_buffer == nullptr ||
+        linear_output_buffer == nullptr || norm_weight_buffer == nullptr || norm_output_buffer == nullptr || residual_buffer == nullptr ||
+        decode_input_buffer == nullptr || decode_output_buffer == nullptr ||
+        f16_weight_buffer == nullptr || f16_output_buffer == nullptr) {
+        std::cerr << "buffer allocation failed: " << error_message << '\n';
+        return 1;
+    }
+    std::vector<std::uint16_t> weight_f16(weight.size(), 0);
+    for (std::size_t index = 0; index < weight.size(); ++index) {
+        weight_f16[index] = Float32ToFloat16Bits(weight[index]);
+    }
     if (!input_buffer->Write(input.data(), sizeof(float) * input.size(), 0, &error_message) ||
         !weight_buffer->Write(weight.data(), sizeof(float) * weight.size(), 0, &error_message) ||
+        !f16_weight_buffer->Write(weight_f16.data(), sizeof(std::uint16_t) * weight_f16.size(), 0, &error_message) ||
         !bias_buffer->Write(bias.data(), sizeof(float) * bias.size(), 0, &error_message) ||
         !norm_weight_buffer->Write(norm_weight.data(), sizeof(float) * norm_weight.size(), 0, &error_message) ||
         !residual_buffer->Write(residual.data(), sizeof(float) * residual.size(), 0, &error_message) ||
@@ -143,6 +173,7 @@ int main() {
 
     const soc::gpu::TensorDesc input_desc = soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, {2, 4});
     const soc::gpu::TensorDesc weight_desc = soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, {4, 3});
+    const soc::gpu::TensorDesc f16_weight_desc = soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat16, {4, 3});
     const soc::gpu::TensorDesc bias_desc = soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, {3});
     const soc::gpu::TensorDesc output_desc = soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, {2, 3});
     const soc::gpu::TensorDesc decode_input_desc = soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, {1, 4});
@@ -150,8 +181,10 @@ int main() {
 
     const soc::gpu::DeviceTensor input_tensor(input_buffer, 0, input_desc);
     const soc::gpu::DeviceTensor weight_tensor(weight_buffer, 0, weight_desc);
+    const soc::gpu::DeviceTensor f16_weight_tensor(f16_weight_buffer, 0, f16_weight_desc);
     const soc::gpu::DeviceTensor bias_tensor(bias_buffer, 0, bias_desc);
     const soc::gpu::DeviceTensor linear_output_tensor(linear_output_buffer, 0, output_desc);
+    const soc::gpu::DeviceTensor f16_output_tensor(f16_output_buffer, 0, output_desc);
     const soc::gpu::DeviceTensor norm_weight_tensor(norm_weight_buffer, 0, bias_desc);
     const soc::gpu::DeviceTensor norm_output_tensor(norm_output_buffer, 0, output_desc);
     const soc::gpu::DeviceTensor residual_tensor(residual_buffer, 0, output_desc);
@@ -220,6 +253,34 @@ int main() {
                                         true,
                                         true);
     if (!CheckVector(linear_output, linear_reference, "linear")) {
+        return 1;
+    }
+
+    temporary_arena->Reset();
+    soc::gpu::LinearParams f16_linear_params;
+    f16_linear_params.matmul.use_bias = true;
+    if (!soc::gpu::LinearOp::Run(*context,
+                                 &pipeline_cache,
+                                 input_tensor,
+                                 f16_weight_tensor,
+                                 &bias_tensor,
+                                 nullptr,
+                                 f16_output_tensor,
+                                 f16_linear_params,
+                                 temporary_arena.get(),
+                                 nullptr,
+                                 &error_message)) {
+        std::cerr << "float16-weight Linear dispatch failed: " << error_message << '\n';
+        return 1;
+    }
+
+    std::vector<float> f16_output(6, 0.0f);
+    if (!f16_output_buffer->Read(f16_output.data(), sizeof(float) * f16_output.size(), 0, &error_message)) {
+        std::cerr << "float16-weight output readback failed: " << error_message << '\n';
+        return 1;
+    }
+    const std::vector<float> f16_reference = ComputeLinearReference(input, weight, bias, 2, 4, 3);
+    if (!CheckVector(f16_output, f16_reference, "linear_f16_weight")) {
         return 1;
     }
 

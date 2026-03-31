@@ -1,5 +1,7 @@
 #include "module/qwen_block.h"
 
+#include <cstdlib>
+
 #include "buffer/buffer_arena.h"
 #include "metal/command_stream.h"
 #include "op/rms_norm_op.h"
@@ -23,6 +25,11 @@ bool AllocateTemporaryTensor(BufferArena* arena,
     }
     *tensor = DeviceTensor(slice.buffer, slice.offset_bytes, desc);
     return true;
+}
+
+bool UseExperimentalSafeDecodeBatch() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_SAFE_DECODE_BATCH");
+    return value != nullptr && std::string(value) == "1";
 }
 
 }  // namespace
@@ -124,6 +131,16 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
         return false;
     }
 
+    CommandStream local_stream;
+    CommandStream* active_stream = stream;
+    const bool use_local_decode_batch = decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch();
+    if (use_local_decode_batch) {
+        if (!local_stream.Begin(context, error_message)) {
+            return false;
+        }
+        active_stream = &local_stream;
+    }
+
     soc::gpu::RmsNormParams post_norm_params;
     post_norm_params.epsilon = params.rms_epsilon;
     post_norm_params.row_count = static_cast<std::uint32_t>(input_shape[0]);
@@ -135,7 +152,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                   post_attention_norm,
                                   post_norm_params,
                                   temporary_arena,
-                                  stream,
+                                  active_stream,
                                   error_message)) {
         return false;
     }
@@ -150,9 +167,15 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                 output,
                                 mlp_params,
                                 temporary_arena,
-                                stream,
+                                active_stream,
                                 error_message)) {
         return false;
+    }
+
+    if (use_local_decode_batch) {
+        if (!local_stream.Flush(context, "DecodePostNormMlpBatch", error_message)) {
+            return false;
+        }
     }
 
     return true;

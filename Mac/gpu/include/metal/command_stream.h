@@ -11,11 +11,17 @@ class MetalContext;
 /// own command buffer, Ops encode into the stream's shared command buffer.
 /// Only when Flush() is called does the command buffer commit and wait.
 ///
+/// Important:
+/// On the Mac mini M4 32GB validation machine, batching an entire decode step or
+/// multi-layer range into one giant command buffer has correlated with
+/// WindowServer-level GPU faults. Keep this primitive behind explicit opt-in and
+/// prefer bounded scopes such as a single layer.
+///
 /// Usage:
 ///   CommandStream stream;
 ///   stream.Begin(context);
 ///   // ... pass &stream to multiple Ops ...
-///   stream.Flush(context, error_message);  // single commit+wait
+///   stream.Flush(context, "LayerBatch", error_message);  // single commit+wait
 ///
 /// When a non-null CommandStream* is passed to an Op, the Op must use
 /// stream->GetEncoder() instead of creating its own command buffer.
@@ -57,7 +63,7 @@ public:
 
     /// Commit the command buffer, wait for GPU completion, and accumulate profiling.
     /// After Flush(), the stream can be reused by calling Begin() again.
-    bool Flush(const MetalContext& context, std::string* error_message);
+    bool Flush(const MetalContext& context, const char* profile_label, std::string* error_message);
 
     /// Returns true if Begin() has been called and Flush() has not yet been called.
     bool IsActive() const;

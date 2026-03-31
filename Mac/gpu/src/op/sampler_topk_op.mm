@@ -162,6 +162,8 @@ bool SamplerTopKOp::Run(const MetalContext& context,
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "Sampler top-k command buffer failed",
+                                               "SamplerTopK",
+                                               1,
                                                error_message)) {
                 return false;
             }

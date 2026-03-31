@@ -4,6 +4,7 @@
 #include "metal/metal_context.h"
 
 #include <mutex>
+#include <string_view>
 #include <utility>
 
 namespace soc::gpu {
@@ -56,11 +57,37 @@ id<MTLLibrary> LoadLibraryFromSource(id<MTLDevice> device,
     return library;
 }
 
+bool LibraryHasRequiredRuntimeKernels(id<MTLLibrary> library) {
+    if (library == nil) {
+        return false;
+    }
+    return [library newFunctionWithName:@"matmul_f32_f16rhs_basic"] != nil &&
+           [library newFunctionWithName:@"matmul_f32_f16rhs_tiled"] != nil &&
+           [library newFunctionWithName:@"matmul_f32_f16rhs_decode_tiled"] != nil &&
+           [library newFunctionWithName:@"matmul_f32_decode_tiled_vec4"] != nil &&
+           [library newFunctionWithName:@"matmul_f32_f16rhs_decode_tiled_vec4"] != nil &&
+           [library newFunctionWithName:@"matmul_f32_decode_lmhead_vec4"] != nil &&
+           [library newFunctionWithName:@"matmul_f32_f16rhs_decode_lmhead_vec4"] != nil &&
+           [library newFunctionWithName:@"dual_matmul_f32_decode_vec4"] != nil &&
+           [library newFunctionWithName:@"dual_matmul_f32_f16rhs_decode_vec4"] != nil &&
+           [library newFunctionWithName:@"affine_qmm_t_4bit"] != nil &&
+           [library newFunctionWithName:@"rms_norm_f32_rowwise_simd"] != nil;
+}
+
 bool DeviceSupportsSIMDGroupMatrix(id<MTLDevice> device) {
     if (@available(macOS 14.0, *)) {
         return [device supportsFamily:MTLGPUFamilyApple7] || [device supportsFamily:MTLGPUFamilyApple8];
     }
     return false;
+}
+
+MetalProfilingEntry* FindProfilingEntry(std::vector<MetalProfilingEntry>* entries, const std::string& label) {
+    for (auto& entry : *entries) {
+        if (entry.label == label) {
+            return &entry;
+        }
+    }
+    return nullptr;
 }
 
 }  // namespace
@@ -104,6 +131,9 @@ std::unique_ptr<MetalContext> MetalContext::CreateDefault(const std::string& met
             if (library == nil && error_message != nullptr) {
                 *error_message = BuildErrorMessage(@"Failed to load metallib", library_error);
             }
+        }
+        if (library != nil && !LibraryHasRequiredRuntimeKernels(library)) {
+            library = nil;
         }
         if (library == nil) {
             library = LoadLibraryFromSource(device, shader_source_path, error_message);
@@ -182,6 +212,8 @@ MetalProfilingSnapshot MetalContext::GetProfilingSnapshot() const {
 
 bool MetalContext::FinalizeCommandBuffer(const void* command_buffer_handle,
                                          const std::string& error_prefix,
+                                         const char* profile_label,
+                                         std::size_t encoder_count,
                                          std::string* error_message) const {
     @autoreleasepool {
         id<MTLCommandBuffer> command_buffer = (__bridge id<MTLCommandBuffer>)command_buffer_handle;
@@ -211,6 +243,18 @@ bool MetalContext::FinalizeCommandBuffer(const void* command_buffer_handle,
         std::lock_guard<std::mutex> lock(impl_->profiling_mutex);
         impl_->profiling_snapshot.gpu_ms += gpu_ms;
         impl_->profiling_snapshot.command_buffer_count += 1;
+        impl_->profiling_snapshot.encoder_count += encoder_count;
+        const std::string label = profile_label != nullptr && profile_label[0] != '\0'
+            ? std::string(profile_label)
+            : error_prefix;
+        MetalProfilingEntry* entry = FindProfilingEntry(&impl_->profiling_snapshot.entries, label);
+        if (entry == nullptr) {
+            impl_->profiling_snapshot.entries.push_back(MetalProfilingEntry{label, gpu_ms, 1, encoder_count});
+        } else {
+            entry->gpu_ms += gpu_ms;
+            entry->command_buffer_count += 1;
+            entry->encoder_count += encoder_count;
+        }
         return true;
     }
 }
@@ -267,6 +311,8 @@ bool MetalContext::RunBootstrapKernel(std::uint32_t input_value,
 
         if (!FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                    "Bootstrap command buffer failed",
+                                   "Bootstrap",
+                                   1,
                                    error_message)) {
             return false;
         }

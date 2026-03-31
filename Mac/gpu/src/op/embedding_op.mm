@@ -165,6 +165,8 @@ bool EmbeddingOp::Run(const MetalContext& context,
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "Embedding command buffer failed",
+                                               "Embedding",
+                                               1,
                                                error_message)) {
                 return false;
             }

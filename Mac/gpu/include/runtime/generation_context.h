@@ -58,6 +58,9 @@ private:
     bool EnsureLogitsBuffer(const MetalContext& context,
                             std::size_t row_count,
                             std::string* error_message);
+    bool EnsureTokenBuffer(const MetalContext& context,
+                           std::size_t token_count,
+                           std::string* error_message);
     bool UploadTokenIds(const MetalContext& context,
                         const std::vector<int>& token_ids,
                         DeviceTensor* token_tensor,
@@ -71,6 +74,7 @@ private:
     std::vector<int> prompt_token_ids_;
     std::vector<int> running_token_ids_;
     std::shared_ptr<class MetalBuffer> logits_buffer_;
+    std::shared_ptr<class MetalBuffer> token_buffer_;
 };
 
 }  // namespace soc::gpu

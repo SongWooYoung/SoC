@@ -748,7 +748,9 @@ int main() {
             return 1;
         }
 
-        soc::gpu::QwenCausalLM gpu_model({{}, {}, {}, {}, true}, {});
+        soc::gpu::QwenCausalLMWeights gpu_weights;
+        gpu_weights.tie_word_embeddings = true;
+        soc::gpu::QwenCausalLM gpu_model(std::move(gpu_weights), {});
         if (!soc::gpu::QwenModelLoader::LoadModelFromFile(*context, manifest_path, &gpu_model, &error_message)) {
             std::cerr << "failed to load GPU model: " << error_message << '\n';
             return 1;

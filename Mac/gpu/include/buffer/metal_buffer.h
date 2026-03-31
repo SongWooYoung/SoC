@@ -14,6 +14,15 @@ public:
                                                      std::size_t size_bytes,
                                                      const std::string& label,
                                                      std::string* error_message);
+    static std::shared_ptr<MetalBuffer> CreatePrivate(const MetalContext& context,
+                                                      std::size_t size_bytes,
+                                                      const std::string& label,
+                                                      std::string* error_message);
+    static std::shared_ptr<MetalBuffer> CreatePrivateInitialized(const MetalContext& context,
+                                                                 const void* source,
+                                                                 std::size_t size_bytes,
+                                                                 const std::string& label,
+                                                                 std::string* error_message);
 
     ~MetalBuffer();
 

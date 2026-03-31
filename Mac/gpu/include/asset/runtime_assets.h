@@ -34,6 +34,7 @@ struct ManifestData {
     std::vector<TensorRecord> tensors;
 
     const TensorRecord& FindTensor(const std::string& name) const;
+    const TensorRecord* FindTensorIfPresent(const std::string& name) const;
 };
 
 class ManifestLoader {

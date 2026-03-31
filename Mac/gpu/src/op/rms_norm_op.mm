@@ -137,8 +137,9 @@ bool RmsNormOp::Run(const MetalContext& context,
 
     KernelKey key;
     key.kind = KernelKind::kRmsNorm;
-    key.function_name = "rms_norm_f32_rowwise";
-    key.threadgroup_width = 1;
+    const bool use_simd_kernel = row_size >= 32;
+    key.function_name = use_simd_kernel ? "rms_norm_f32_rowwise_simd" : "rms_norm_f32_rowwise";
+    key.threadgroup_width = use_simd_kernel ? 32 : 1;
     key.threadgroup_height = 1;
 
     const void* pipeline_handle = pipeline_cache->GetOrCreatePipeline(key, error_message);
@@ -188,9 +189,15 @@ bool RmsNormOp::Run(const MetalContext& context,
         [encoder setBuffer:output_buffer offset:output.GetByteOffset() atIndex:2];
         [encoder setBuffer:params_buffer offset:params_offset atIndex:3];
 
-        const MTLSize grid_size = MTLSizeMake(row_count, 1, 1);
-        const MTLSize threadgroup_size = MTLSizeMake(1, 1, 1);
-        [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
+        if (use_simd_kernel) {
+            const MTLSize threadgroup_count = MTLSizeMake(row_count, 1, 1);
+            const MTLSize threadgroup_size = MTLSizeMake(32, 1, 1);
+            [encoder dispatchThreadgroups:threadgroup_count threadsPerThreadgroup:threadgroup_size];
+        } else {
+            const MTLSize grid_size = MTLSizeMake(row_count, 1, 1);
+            const MTLSize threadgroup_size = MTLSizeMake(1, 1, 1);
+            [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
+        }
 
         if (stream != nullptr) {
             stream->EndEncoder();
@@ -198,6 +205,8 @@ bool RmsNormOp::Run(const MetalContext& context,
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "RMSNorm command buffer failed",
+                                               "RMSNorm",
+                                               1,
                                                error_message)) {
                 return false;
             }

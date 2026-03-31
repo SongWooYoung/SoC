@@ -4,6 +4,7 @@
 #include <string>
 
 #include "kernel/pipeline_cache.h"
+#include "op/affine_qmm_op.h"
 #include "runtime/kv_cache.h"
 #include "tensor/device_tensor.h"
 
@@ -15,9 +16,13 @@ class MetalContext;
 
 struct QwenAttentionWeights {
     DeviceTensor q_proj_weight;
+    AffineQmmWeight q_proj_q4_weight;
     DeviceTensor k_proj_weight;
+    AffineQmmWeight k_proj_q4_weight;
     DeviceTensor v_proj_weight;
+    AffineQmmWeight v_proj_q4_weight;
     DeviceTensor o_proj_weight;
+    AffineQmmWeight o_proj_q4_weight;
     DeviceTensor q_norm_weight;
     DeviceTensor k_norm_weight;
 };

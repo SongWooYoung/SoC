@@ -65,6 +65,7 @@ struct InferenceRunResult {
     std::string generated_text;
     double wall_ms = 0.0;
     double gpu_ms = 0.0;
+    soc::gpu::MetalProfilingSnapshot profile;
 };
 
 [[noreturn]] void PrintUsageAndExit(const char* executable, int exit_code) {
@@ -402,6 +403,25 @@ std::string JsonStringArray(const std::vector<std::string>& values) {
     return stream.str();
 }
 
+std::string JsonProfilingEntries(const soc::gpu::MetalProfilingSnapshot& snapshot) {
+    std::ostringstream stream;
+    stream << '[';
+    for (std::size_t index = 0; index < snapshot.entries.size(); ++index) {
+        if (index != 0) {
+            stream << ", ";
+        }
+        const auto& entry = snapshot.entries[index];
+        stream << "{"
+               << "\"label\":\"" << JsonEscape(entry.label) << "\", "
+               << "\"gpu_ms\":" << entry.gpu_ms << ", "
+               << "\"command_buffer_count\":" << entry.command_buffer_count << ", "
+               << "\"encoder_count\":" << entry.encoder_count
+               << "}";
+    }
+    stream << ']';
+    return stream.str();
+}
+
 InferenceRunResult RunFullGpuInference(const soc::gpu::MetalContext& context,
                                        soc::gpu::PipelineCache* pipeline_cache,
                                        soc::gpu::BufferArena* temporary_arena,
@@ -434,7 +454,8 @@ InferenceRunResult RunFullGpuInference(const soc::gpu::MetalContext& context,
         return run;
     }
     run.wall_ms = DurationMilliseconds(start_time, Clock::now());
-    run.gpu_ms = context.GetProfilingSnapshot().gpu_ms;
+    run.profile = context.GetProfilingSnapshot();
+    run.gpu_ms = run.profile.gpu_ms;
     run.generated_text = TokenizerRuntime(tokenizer_runtime).Decode(run.generated_token_ids);
     return run;
 }
@@ -489,6 +510,7 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
     if (generation.max_new_tokens == 0) {
         run.wall_ms = DurationMilliseconds(start_time, Clock::now());
         run.gpu_ms = 0.0;
+        run.profile = {};
         return run;
     }
 
@@ -581,7 +603,8 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
     }
 
     run.wall_ms = DurationMilliseconds(start_time, Clock::now());
-    run.gpu_ms = context.GetProfilingSnapshot().gpu_ms;
+    run.profile = context.GetProfilingSnapshot();
+    run.gpu_ms = run.profile.gpu_ms;
     run.generated_text = TokenizerRuntime(tokenizer_runtime).Decode(run.generated_token_ids);
     return run;
 }
@@ -595,7 +618,8 @@ std::string BuildPrimaryOutput(const CliOptions& options,
                                const std::string& generated_text,
                                const soc::gpu::MetalDeviceInfo& device_info,
                                double wall_ms,
-                               double gpu_ms) {
+                               double gpu_ms,
+                               const soc::gpu::MetalProfilingSnapshot& profile) {
     if (!options.json_output) {
         return generated_text + "\n";
     }
@@ -635,7 +659,10 @@ std::string BuildPrimaryOutput(const CliOptions& options,
     stream << "  },\n";
     stream << "  \"timing\": {\n";
     stream << "    \"wall_ms\": " << wall_ms << ",\n";
-    stream << "    \"gpu_ms\": " << gpu_ms << "\n";
+    stream << "    \"gpu_ms\": " << gpu_ms << ",\n";
+    stream << "    \"command_buffer_count\": " << profile.command_buffer_count << ",\n";
+    stream << "    \"encoder_count\": " << profile.encoder_count << ",\n";
+    stream << "    \"entries\": " << JsonProfilingEntries(profile) << "\n";
     stream << "  }\n";
     stream << "}\n";
     return stream.str();
@@ -671,7 +698,8 @@ void PrintVerboseSummary(const CliOptions& options,
                          const std::vector<int>& generated_token_ids,
                          const soc::gpu::MetalDeviceInfo& device_info,
                          double wall_ms,
-                         double gpu_ms) {
+                         double gpu_ms,
+                         const soc::gpu::MetalProfilingSnapshot& profile) {
     std::cerr << "manifest=" << options.manifest_path << "\n";
     if (!options.prompt_file.empty()) {
         std::cerr << "prompt_file=" << options.prompt_file << "\n";
@@ -691,6 +719,13 @@ void PrintVerboseSummary(const CliOptions& options,
     PrintTokenIds(std::cerr, "generated_token_ids", generated_token_ids);
     std::cerr << "wall_ms=" << wall_ms << "\n";
     std::cerr << "gpu_ms=" << gpu_ms << "\n";
+    std::cerr << "command_buffer_count=" << profile.command_buffer_count << "\n";
+    std::cerr << "encoder_count=" << profile.encoder_count << "\n";
+    for (const auto& entry : profile.entries) {
+        std::cerr << "profile[" << entry.label << "] gpu_ms=" << entry.gpu_ms
+                  << " command_buffers=" << entry.command_buffer_count
+                  << " encoders=" << entry.encoder_count << "\n";
+    }
 }
 
 }  // namespace
@@ -732,7 +767,9 @@ int main(int argc, char** argv) {
             const QwenCausalLM cpu_model = QwenModelLoader::LoadModel(manifest);
             run = RunFullCpuInference(cpu_model, generation, prepared_prompt, tokenizer_runtime);
         } else if (plan.mode == "hybrid") {
-            soc::gpu::QwenCausalLM gpu_model({{}, {}, {}, {}, true}, {});
+            soc::gpu::QwenCausalLMWeights gpu_weights;
+            gpu_weights.tie_word_embeddings = true;
+            soc::gpu::QwenCausalLM gpu_model(std::move(gpu_weights), {});
             if (!soc::gpu::QwenModelLoader::LoadModelFromFile(*context, options.manifest_path, &gpu_model, &error_message)) {
                 std::cerr << "failed to load GPU model: " << error_message << '\n';
                 return 1;
@@ -749,7 +786,9 @@ int main(int argc, char** argv) {
                                      tokenizer_runtime,
                                      &error_message);
         } else {
-            soc::gpu::QwenCausalLM gpu_model({{}, {}, {}, {}, true}, {});
+            soc::gpu::QwenCausalLMWeights gpu_weights;
+            gpu_weights.tie_word_embeddings = true;
+            soc::gpu::QwenCausalLM gpu_model(std::move(gpu_weights), {});
             if (!soc::gpu::QwenModelLoader::LoadModelFromFile(*context, options.manifest_path, &gpu_model, &error_message)) {
                 std::cerr << "failed to load GPU model: " << error_message << '\n';
                 return 1;
@@ -777,7 +816,8 @@ int main(int argc, char** argv) {
                                                        run.generated_text,
                                                        context->GetDeviceInfo(),
                                                        run.wall_ms,
-                                                       run.gpu_ms);
+                                                       run.gpu_ms,
+                                                       run.profile);
         WritePrimaryOutput(options, payload);
 
         if (options.verbose) {
@@ -789,7 +829,8 @@ int main(int argc, char** argv) {
                                 run.generated_token_ids,
                                 context->GetDeviceInfo(),
                                 run.wall_ms,
-                                run.gpu_ms);
+                                run.gpu_ms,
+                                run.profile);
         }
         return 0;
     } catch (const std::exception& error) {

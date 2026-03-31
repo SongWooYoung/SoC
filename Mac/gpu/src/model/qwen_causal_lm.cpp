@@ -1,13 +1,37 @@
 #include "model/qwen_causal_lm.h"
 
+#include <cstdlib>
+
 #include "buffer/buffer_arena.h"
 #include "metal/command_stream.h"
+#include "op/affine_qmm_op.h"
 #include "op/embedding_op.h"
 #include "op/linear_op.h"
 #include "op/rms_norm_op.h"
 
 namespace soc::gpu {
 namespace {
+
+enum class CommandStreamMode {
+    kOff,
+    kLayer,
+    kFullRange,
+};
+
+CommandStreamMode ResolveCommandStreamMode() {
+    const char* stream_env = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_COMMAND_STREAM");
+    if (stream_env == nullptr) {
+        return CommandStreamMode::kOff;
+    }
+    const std::string value(stream_env);
+    if (value == "1" || value == "full" || value == "range") {
+        return CommandStreamMode::kFullRange;
+    }
+    if (value == "layer") {
+        return CommandStreamMode::kLayer;
+    }
+    return CommandStreamMode::kOff;
+}
 
 bool AllocateTemporaryTensor(BufferArena* arena,
                              const TensorDesc& desc,
@@ -56,6 +80,15 @@ bool ValidateLayerRange(std::size_t start_layer,
     return true;
 }
 
+bool UseExperimentalQ4LmHead() {
+    const char* decode_value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_Q4_DECODE");
+    if (decode_value != nullptr && std::string(decode_value) == "1") {
+        return true;
+    }
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_Q4_LMHEAD");
+    return value != nullptr && std::string(value) == "1";
+}
+
 bool RunBlockRange(const MetalContext& context,
                    PipelineCache* pipeline_cache,
                    const QwenCausalLMWeights& weights,
@@ -69,6 +102,7 @@ bool RunBlockRange(const MetalContext& context,
                    std::size_t end_layer,
                    bool apply_final_norm,
                    std::string* error_message) {
+    const CommandStreamMode command_stream_mode = ResolveCommandStreamMode();
     if (!ValidateLayerRange(start_layer, end_layer, weights.blocks.size(), error_message)) {
         return false;
     }
@@ -110,22 +144,39 @@ bool RunBlockRange(const MetalContext& context,
     BufferArenaMarkGuard arena_mark(temporary_arena, kv_cache == nullptr ? "QwenCausalLMHiddenRange" : (token_count == 1 ? "QwenCausalLMDecodeRange" : "QwenCausalLMPrefillRange"));
 
     DeviceTensor current_hidden = input_hidden;
-    DeviceTensor scratch_hidden;
+    DeviceTensor scratch_a;
+    DeviceTensor scratch_b;
     const TensorDesc hidden_desc = TensorDesc::CreateContiguous(DataType::kFloat32, {token_count, params.hidden_size});
-    if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &scratch_hidden, error_message)) {
+    if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &scratch_a, error_message)) {
+        return false;
+    }
+    if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &scratch_b, error_message)) {
         return false;
     }
 
     const bool decode_mode = token_count == 1;
 
     CommandStream stream;
-    if (!stream.Begin(context, error_message)) {
-        return false;
+    CommandStream* active_stream = nullptr;
+    if (command_stream_mode == CommandStreamMode::kFullRange) {
+        if (!stream.Begin(context, error_message)) {
+            return false;
+        }
+        active_stream = &stream;
     }
 
     for (std::size_t layer_index = start_layer; layer_index < end_layer; ++layer_index) {
+        if (command_stream_mode == CommandStreamMode::kLayer) {
+            if (!stream.Begin(context, error_message)) {
+                return false;
+            }
+            active_stream = &stream;
+        }
         const bool is_last_layer = layer_index + 1 == end_layer;
-        const DeviceTensor layer_output = (!apply_final_norm && is_last_layer) ? output : scratch_hidden;
+        const bool use_final_output = !apply_final_norm && is_last_layer;
+        const DeviceTensor layer_output = use_final_output
+            ? output
+            : ((layer_index - start_layer) % 2 == 0 ? scratch_a : scratch_b);
 
         QwenBlockParams block_params;
         block_params.attention.num_attention_heads = params.num_attention_heads;
@@ -146,7 +197,7 @@ bool RunBlockRange(const MetalContext& context,
                              layer_output,
                              block_params,
                              temporary_arena,
-                             &stream,
+                             active_stream,
                              error_message)
             : (decode_mode
                 ? QwenBlock::RunDecode(context,
@@ -158,7 +209,7 @@ bool RunBlockRange(const MetalContext& context,
                                        layer_output,
                                        block_params,
                                        temporary_arena,
-                                       &stream,
+                                       active_stream,
                                        error_message)
                 : QwenBlock::RunPrefill(context,
                                         pipeline_cache,
@@ -169,24 +220,26 @@ bool RunBlockRange(const MetalContext& context,
                                         layer_output,
                                         block_params,
                                         temporary_arena,
-                                        &stream,
+                                        active_stream,
                                         error_message));
         if (!block_ok) {
             return false;
         }
 
+        if (command_stream_mode == CommandStreamMode::kLayer) {
+            if (!active_stream->Flush(context, "LayerBatch", error_message)) {
+                return false;
+            }
+            active_stream = nullptr;
+        }
+
         if (!is_last_layer || apply_final_norm) {
             current_hidden = layer_output;
-            if (!(is_last_layer && apply_final_norm)) {
-                if (!AllocateTemporaryTensor(temporary_arena, hidden_desc, &scratch_hidden, error_message)) {
-                    return false;
-                }
-            }
         }
     }
 
     if (!apply_final_norm) {
-        return stream.Flush(context, error_message);
+        return active_stream == nullptr ? true : active_stream->Flush(context, "FullRangeBatch", error_message);
     }
 
     RmsNormParams final_norm_params;
@@ -200,11 +253,11 @@ bool RunBlockRange(const MetalContext& context,
                           output,
                           final_norm_params,
                           temporary_arena,
-                          &stream,
+                          active_stream,
                           error_message)) {
         return false;
     }
-    return stream.Flush(context, error_message);
+    return active_stream == nullptr ? true : active_stream->Flush(context, "FullRangeBatch", error_message);
 }
 
 }  // namespace
@@ -536,8 +589,27 @@ bool QwenCausalLM::ComputeLogitsFromHidden(const MetalContext& context,
     logits_params.matmul.row_count = static_cast<std::uint32_t>(token_count);
     logits_params.matmul.inner_dim = static_cast<std::uint32_t>(params_.hidden_size);
     logits_params.matmul.column_count = static_cast<std::uint32_t>(params_.vocab_size);
+    logits_params.matmul.profile_label = token_count == 1 ? "LMHeadDecode" : "LMHeadPrefill";
     logits_params.matmul.decode_mode = token_count == 1;
     logits_params.matmul.transpose_rhs = true;
+    if (token_count == 1 && weights_.has_quantized_lm_head && UseExperimentalQ4LmHead()) {
+        AffineQmmParams qmm_params;
+        qmm_params.row_count = 1;
+        qmm_params.inner_dim = static_cast<std::uint32_t>(params_.hidden_size);
+        qmm_params.column_count = static_cast<std::uint32_t>(params_.vocab_size);
+        qmm_params.output_row_stride = static_cast<std::uint32_t>(params_.vocab_size);
+        qmm_params.profile_label = "LMHeadDecodeQ4";
+        return AffineQmmOp::Run(context,
+                                pipeline_cache,
+                                hidden_states,
+                                weights_.lm_head_q4_weight,
+                                nullptr,
+                                logits_output,
+                                qmm_params,
+                                temporary_arena,
+                                nullptr,
+                                error_message);
+    }
     const DeviceTensor& projection_weight = weights_.tie_word_embeddings ? weights_.embed_tokens_weight : weights_.lm_head_weight;
     return LinearOp::Run(context,
                          pipeline_cache,

@@ -48,8 +48,8 @@ def benchmark(
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         dtype=dtype,
-        device_map=device,
     )
+    model = model.to(device)
     model.eval()
     load_time = time.perf_counter() - t0
     results["load_time_s"] = round(load_time, 3)

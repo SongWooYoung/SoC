@@ -156,6 +156,8 @@ bool RopeOp::Run(const MetalContext& context,
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "RoPE command buffer failed",
+                                               "RoPE",
+                                               1,
                                                error_message)) {
                 return false;
             }

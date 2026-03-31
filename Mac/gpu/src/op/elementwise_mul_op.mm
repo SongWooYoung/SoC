@@ -158,6 +158,8 @@ bool ElementwiseMulOp::Run(const MetalContext& context,
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "ElementwiseMul command buffer failed",
+                                               "ElementwiseMul",
+                                               1,
                                                error_message)) {
                 return false;
             }

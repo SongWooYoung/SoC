@@ -84,6 +84,9 @@
 12. [12_LAYER_SPLIT_BENCHMARK.md](12_LAYER_SPLIT_BENCHMARK.md)
    `gpu_infer --layer 1..N-1,-1` / `max_new_tokens=64` 실측 benchmark 결과
 
+13. [13_GPU_FAULT_POSTMORTEM.md](13_GPU_FAULT_POSTMORTEM.md)
+   Mac mini M4 32GB에서 관찰된 `WindowServer` 수준 GPU fault의 재현 조건, 현재 안전 정책, 재도입 규칙
+
 ## Current Test Result Paths
 
 현재 real-bundle regression 결과는 두 군데에 남긴다.
