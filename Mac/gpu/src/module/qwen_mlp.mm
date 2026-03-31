@@ -1,6 +1,7 @@
 #include "module/qwen_mlp.h"
 
 #include "buffer/buffer_arena.h"
+#include "metal/command_stream.h"
 #include "op/elementwise_mul_op.h"
 #include "op/linear_op.h"
 
@@ -99,6 +100,7 @@ bool QwenMLP::Run(const MetalContext& context,
                   const DeviceTensor& output,
                   const QwenMlpParams& params,
                   BufferArena* temporary_arena,
+                  CommandStream* stream,
                   std::string* error_message) {
     if (pipeline_cache == nullptr) {
         if (error_message != nullptr) {
@@ -158,6 +160,7 @@ bool QwenMLP::Run(const MetalContext& context,
                        gate_tensor,
                        gate_params,
                        temporary_arena,
+                       stream,
                        error_message)) {
         return false;
     }
@@ -177,6 +180,7 @@ bool QwenMLP::Run(const MetalContext& context,
                        up_tensor,
                        up_params,
                        temporary_arena,
+                       stream,
                        error_message)) {
         return false;
     }
@@ -191,6 +195,7 @@ bool QwenMLP::Run(const MetalContext& context,
                                fused_tensor,
                                mul_params,
                                temporary_arena,
+                               stream,
                                error_message)) {
         return false;
     }
@@ -211,6 +216,7 @@ bool QwenMLP::Run(const MetalContext& context,
                        output,
                        down_params,
                        temporary_arena,
+                       stream,
                        error_message)) {
         return false;
     }

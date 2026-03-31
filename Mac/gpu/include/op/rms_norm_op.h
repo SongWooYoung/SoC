@@ -9,6 +9,7 @@
 namespace soc::gpu {
 
 class BufferArena;
+class CommandStream;
 
 struct RmsNormParams {
     float epsilon = 1.0e-5f;
@@ -27,6 +28,7 @@ public:
                     const DeviceTensor& output,
                     const RmsNormParams& params,
                     BufferArena* temporary_arena,
+                    CommandStream* stream,
                     std::string* error_message);
 };
 

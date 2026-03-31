@@ -124,6 +124,7 @@ bool Sampler::SampleFromLogits(const MetalContext& context,
                             top_indices_tensor,
                             params,
                             temporary_arena,
+                            nullptr,
                             error_message)) {
         return false;
     }

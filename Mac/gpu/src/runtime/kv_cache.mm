@@ -4,6 +4,7 @@
 #include "runtime/kv_cache.h"
 
 #include "buffer/metal_buffer.h"
+#include "metal/command_stream.h"
 #include "metal/metal_context.h"
 
 namespace soc::gpu {
@@ -83,6 +84,7 @@ bool KVCache::AppendPrefill(const MetalContext& context,
                             std::size_t layer_index,
                             const DeviceTensor& keys,
                             const DeviceTensor& values,
+                            CommandStream* stream,
                             std::string* error_message) {
     if (layer_index >= layer_count_) {
         if (error_message != nullptr) {
@@ -107,8 +109,8 @@ bool KVCache::AppendPrefill(const MetalContext& context,
         return false;
     }
     const std::size_t sequence_offset = sequence_lengths_[layer_index];
-    if (!CopyIntoLayer(context, key_buffer_, layer_index, sequence_offset, keys, error_message) ||
-        !CopyIntoLayer(context, value_buffer_, layer_index, sequence_offset, values, error_message)) {
+    if (!CopyIntoLayer(context, key_buffer_, layer_index, sequence_offset, keys, stream, error_message) ||
+        !CopyIntoLayer(context, value_buffer_, layer_index, sequence_offset, values, stream, error_message)) {
         return false;
     }
     sequence_lengths_[layer_index] += row_count;
@@ -119,6 +121,7 @@ bool KVCache::AppendDecodeToken(const MetalContext& context,
                                 std::size_t layer_index,
                                 const DeviceTensor& key,
                                 const DeviceTensor& value,
+                                CommandStream* stream,
                                 std::string* error_message) {
     if (key.GetDesc().Rank() != 2 || value.GetDesc().Rank() != 2 || key.GetDesc().GetShape()[0] != 1 ||
         value.GetDesc().GetShape()[0] != 1) {
@@ -127,7 +130,7 @@ bool KVCache::AppendDecodeToken(const MetalContext& context,
         }
         return false;
     }
-    return AppendPrefill(context, layer_index, key, value, error_message);
+    return AppendPrefill(context, layer_index, key, value, stream, error_message);
 }
 
 KVCacheLayerView KVCache::ViewForLayer(std::size_t layer_index) const {
@@ -168,6 +171,7 @@ bool KVCache::CopyIntoLayer(const MetalContext& context,
                             std::size_t layer_index,
                             std::size_t sequence_offset,
                             const DeviceTensor& source,
+                            CommandStream* stream,
                             std::string* error_message) {
     const std::size_t hidden_size = key_value_head_count_ * head_dim_;
     const std::size_t row_count = source.GetDesc().GetShape()[0];
@@ -175,12 +179,19 @@ bool KVCache::CopyIntoLayer(const MetalContext& context,
     const std::size_t destination_offset = LayerByteOffset(layer_index) + sequence_offset * row_bytes;
 
     @autoreleasepool {
-        id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
         id<MTLBuffer> source_buffer = (__bridge id<MTLBuffer>)source.GetBuffer()->GetNativeHandle();
         id<MTLBuffer> destination_buffer = (__bridge id<MTLBuffer>)destination->GetNativeHandle();
-        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-        id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
-        if (command_buffer == nil || encoder == nil) {
+
+        id<MTLBlitCommandEncoder> encoder = nil;
+        id<MTLCommandBuffer> command_buffer = nil;
+        if (stream != nullptr) {
+            encoder = (__bridge id<MTLBlitCommandEncoder>)stream->BeginBlitEncoder();
+        } else {
+            id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+            command_buffer = [command_queue commandBuffer];
+            encoder = [command_buffer blitCommandEncoder];
+        }
+        if (encoder == nil) {
             if (error_message != nullptr) {
                 *error_message = "Failed to create KVCache blit command objects";
             }
@@ -192,11 +203,16 @@ bool KVCache::CopyIntoLayer(const MetalContext& context,
                        toBuffer:destination_buffer
               destinationOffset:destination_offset
                            size:row_count * row_bytes];
-        [encoder endEncoding];
-        if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
-                                           "KVCache blit command failed",
-                                           error_message)) {
-            return false;
+
+        if (stream != nullptr) {
+            stream->EndEncoder();
+        } else {
+            [encoder endEncoding];
+            if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
+                                               "KVCache blit command failed",
+                                               error_message)) {
+                return false;
+            }
         }
     }
 

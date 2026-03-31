@@ -195,6 +195,7 @@ int main() {
                                  linear_output_tensor,
                                  linear_params,
                                  temporary_arena.get(),
+                                 nullptr,
                                  &error_message)) {
         std::cerr << "Linear dispatch failed: " << error_message << '\n';
         return 1;
@@ -236,6 +237,7 @@ int main() {
                                   norm_output_tensor,
                                   rms_norm_params,
                                   temporary_arena.get(),
+                                  nullptr,
                                   &error_message)) {
         std::cerr << "RMSNorm after Linear failed: " << error_message << '\n';
         return 1;
@@ -271,6 +273,7 @@ int main() {
                                  decode_output_tensor,
                                  decode_params,
                                  temporary_arena.get(),
+                                 nullptr,
                                  &error_message)) {
         std::cerr << "decode Linear dispatch failed: " << error_message << '\n';
         return 1;

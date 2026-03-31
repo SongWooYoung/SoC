@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "buffer/buffer_arena.h"
+#include "metal/command_stream.h"
 #include "metal/metal_context.h"
 
 namespace soc::gpu {
@@ -205,6 +206,7 @@ bool MatMulOp::Run(const MetalContext& context,
                    const DeviceTensor& output,
                    const MatMulParams& params,
                    BufferArena* temporary_arena,
+                   CommandStream* stream,
                    std::string* error_message) {
     if (pipeline_cache == nullptr) {
         if (error_message != nullptr) {
@@ -289,8 +291,7 @@ bool MatMulOp::Run(const MetalContext& context,
     }
 
     @autoreleasepool {
-        BufferArenaMarkGuard arena_mark(temporary_arena, "MatMulOp");
-        id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+        BufferArenaMarkGuard arena_mark(stream != nullptr ? nullptr : temporary_arena, "MatMulOp");
         id<MTLComputePipelineState> pipeline = (__bridge id<MTLComputePipelineState>)pipeline_handle;
         id<MTLBuffer> lhs_buffer = (__bridge id<MTLBuffer>)lhs.GetBuffer()->GetNativeHandle();
         id<MTLBuffer> rhs_buffer = (__bridge id<MTLBuffer>)rhs.GetBuffer()->GetNativeHandle();
@@ -314,15 +315,21 @@ bool MatMulOp::Run(const MetalContext& context,
             return false;
         }
 
-        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-        if (command_buffer == nil) {
-            if (error_message != nullptr) {
-                *error_message = "Failed to create MatMul command buffer";
+        id<MTLComputeCommandEncoder> encoder = nil;
+        id<MTLCommandBuffer> command_buffer = nil;
+        if (stream != nullptr) {
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+        } else {
+            id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+            command_buffer = [command_queue commandBuffer];
+            if (command_buffer == nil) {
+                if (error_message != nullptr) {
+                    *error_message = "Failed to create MatMul command buffer";
+                }
+                return false;
             }
-            return false;
+            encoder = [command_buffer computeCommandEncoder];
         }
-
-        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
         if (encoder == nil) {
             if (error_message != nullptr) {
                 *error_message = "Failed to create MatMul compute encoder";
@@ -352,12 +359,16 @@ bool MatMulOp::Run(const MetalContext& context,
             const MTLSize grid_size = MTLSizeMake(column_count, row_count, 1);
             [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
         }
-        [encoder endEncoding];
 
-        if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
-                                           "MatMul command buffer failed",
-                                           error_message)) {
-            return false;
+        if (stream != nullptr) {
+            stream->EndEncoder();
+        } else {
+            [encoder endEncoding];
+            if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
+                                               "MatMul command buffer failed",
+                                               error_message)) {
+                return false;
+            }
         }
     }
 

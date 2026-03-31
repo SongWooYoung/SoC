@@ -107,6 +107,7 @@ int main() {
                                   output_tensor,
                                   params,
                                   temporary_arena.get(),
+                                  nullptr,
                                   &error_message)) {
         std::cerr << "RMSNorm dispatch failed: " << error_message << '\n';
         return 1;

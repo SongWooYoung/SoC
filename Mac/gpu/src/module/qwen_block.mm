@@ -1,6 +1,7 @@
 #include "module/qwen_block.h"
 
 #include "buffer/buffer_arena.h"
+#include "metal/command_stream.h"
 #include "op/rms_norm_op.h"
 
 namespace soc::gpu {
@@ -38,6 +39,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                       const soc::gpu::DeviceTensor& output,
                       const soc::gpu::QwenBlockParams& params,
                       soc::gpu::BufferArena* temporary_arena,
+                      soc::gpu::CommandStream* stream,
                       std::string* error_message) {
     if (pipeline_cache == nullptr) {
         if (error_message != nullptr) {
@@ -85,6 +87,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                   input_norm,
                                   input_norm_params,
                                   temporary_arena,
+                                  stream,
                                   error_message)) {
         return false;
     }
@@ -103,6 +106,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                              attention_output,
                                              attention_params,
                                              temporary_arena,
+                                             stream,
                                              error_message)
         : soc::gpu::QwenAttention::RunPrefill(context,
                                               pipeline_cache,
@@ -114,6 +118,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                               attention_output,
                                               attention_params,
                                               temporary_arena,
+                                              stream,
                                               error_message);
     if (!attention_ok) {
         return false;
@@ -130,6 +135,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                   post_attention_norm,
                                   post_norm_params,
                                   temporary_arena,
+                                  stream,
                                   error_message)) {
         return false;
     }
@@ -144,6 +150,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                 output,
                                 mlp_params,
                                 temporary_arena,
+                                stream,
                                 error_message)) {
         return false;
     }
@@ -160,6 +167,7 @@ bool QwenBlock::Run(const MetalContext& context,
                     const DeviceTensor& output,
                     const QwenBlockParams& params,
                     BufferArena* temporary_arena,
+                    CommandStream* stream,
                     std::string* error_message) {
     return RunBlockInternal(context,
                             pipeline_cache,
@@ -171,6 +179,7 @@ bool QwenBlock::Run(const MetalContext& context,
                             output,
                             params,
                             temporary_arena,
+                            stream,
                             error_message);
 }
 
@@ -183,6 +192,7 @@ bool QwenBlock::RunPrefill(const MetalContext& context,
                            const DeviceTensor& output,
                            const QwenBlockParams& params,
                            BufferArena* temporary_arena,
+                           CommandStream* stream,
                            std::string* error_message) {
     return RunBlockInternal(context,
                             pipeline_cache,
@@ -194,6 +204,7 @@ bool QwenBlock::RunPrefill(const MetalContext& context,
                             output,
                             params,
                             temporary_arena,
+                            stream,
                             error_message);
 }
 
@@ -206,6 +217,7 @@ bool QwenBlock::RunDecode(const MetalContext& context,
                           const DeviceTensor& output,
                           const QwenBlockParams& params,
                           BufferArena* temporary_arena,
+                          CommandStream* stream,
                           std::string* error_message) {
     return RunBlockInternal(context,
                             pipeline_cache,
@@ -217,6 +229,7 @@ bool QwenBlock::RunDecode(const MetalContext& context,
                             output,
                             params,
                             temporary_arena,
+                            stream,
                             error_message);
 }
 

@@ -9,6 +9,7 @@
 namespace soc::gpu {
 
 class BufferArena;
+class CommandStream;
 class MetalContext;
 
 struct SamplerTopKParams {
@@ -28,6 +29,7 @@ public:
                     const DeviceTensor& top_indices,
                     const SamplerTopKParams& params,
                     BufferArena* temporary_arena,
+                    CommandStream* stream,
                     std::string* error_message);
 };
 

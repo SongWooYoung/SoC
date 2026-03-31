@@ -4,6 +4,7 @@
 #include "op/elementwise_mul_op.h"
 
 #include "buffer/buffer_arena.h"
+#include "metal/command_stream.h"
 #include "metal/metal_context.h"
 
 namespace soc::gpu {
@@ -57,6 +58,7 @@ bool ElementwiseMulOp::Run(const MetalContext& context,
                            const DeviceTensor& output,
                            const ElementwiseMulParams& params,
                            BufferArena* temporary_arena,
+                           CommandStream* stream,
                            std::string* error_message) {
     if (pipeline_cache == nullptr) {
         if (error_message != nullptr) {
@@ -107,8 +109,7 @@ bool ElementwiseMulOp::Run(const MetalContext& context,
     }
 
     @autoreleasepool {
-        BufferArenaMarkGuard arena_mark(temporary_arena, "ElementwiseMulOp");
-        id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+        BufferArenaMarkGuard arena_mark(stream != nullptr ? nullptr : temporary_arena, "ElementwiseMulOp");
         id<MTLComputePipelineState> pipeline = (__bridge id<MTLComputePipelineState>)pipeline_handle;
         id<MTLBuffer> lhs_buffer = (__bridge id<MTLBuffer>)lhs.GetBuffer()->GetNativeHandle();
         id<MTLBuffer> rhs_buffer = (__bridge id<MTLBuffer>)rhs.GetBuffer()->GetNativeHandle();
@@ -121,9 +122,22 @@ bool ElementwiseMulOp::Run(const MetalContext& context,
             return false;
         }
 
-        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-        if (command_buffer == nil || encoder == nil) {
+        id<MTLComputeCommandEncoder> encoder = nil;
+        id<MTLCommandBuffer> command_buffer = nil;
+        if (stream != nullptr) {
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+        } else {
+            id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+            command_buffer = [command_queue commandBuffer];
+            if (command_buffer == nil) {
+                if (error_message != nullptr) {
+                    *error_message = "Failed to create elementwise mul command objects";
+                }
+                return false;
+            }
+            encoder = [command_buffer computeCommandEncoder];
+        }
+        if (encoder == nil) {
             if (error_message != nullptr) {
                 *error_message = "Failed to create elementwise mul command objects";
             }
@@ -137,11 +151,16 @@ bool ElementwiseMulOp::Run(const MetalContext& context,
         [encoder setBuffer:params_buffer offset:params_offset atIndex:3];
         [encoder dispatchThreads:MTLSizeMake(row_size, row_count, 1)
                  threadsPerThreadgroup:MTLSizeMake(key.threadgroup_width, key.threadgroup_height, 1)];
-        [encoder endEncoding];
-        if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
-                                           "ElementwiseMul command buffer failed",
-                                           error_message)) {
-            return false;
+
+        if (stream != nullptr) {
+            stream->EndEncoder();
+        } else {
+            [encoder endEncoding];
+            if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
+                                               "ElementwiseMul command buffer failed",
+                                               error_message)) {
+                return false;
+            }
         }
     }
 

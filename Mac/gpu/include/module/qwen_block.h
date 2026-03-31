@@ -34,6 +34,7 @@ public:
                     const DeviceTensor& output,
                     const QwenBlockParams& params,
                     BufferArena* temporary_arena,
+                    CommandStream* stream,
                     std::string* error_message);
 
     static bool RunPrefill(const MetalContext& context,
@@ -45,6 +46,7 @@ public:
                            const DeviceTensor& output,
                            const QwenBlockParams& params,
                            BufferArena* temporary_arena,
+                           CommandStream* stream,
                            std::string* error_message);
 
     static bool RunDecode(const MetalContext& context,
@@ -56,6 +58,7 @@ public:
                           const DeviceTensor& output,
                           const QwenBlockParams& params,
                           BufferArena* temporary_arena,
+                          CommandStream* stream,
                           std::string* error_message);
 };
 

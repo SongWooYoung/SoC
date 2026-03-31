@@ -9,6 +9,7 @@
 namespace soc::gpu {
 
 class BufferArena;
+class CommandStream;
 class MetalContext;
 
 struct QwenMlpWeights {
@@ -32,6 +33,7 @@ public:
                     const DeviceTensor& output,
                     const QwenMlpParams& params,
                     BufferArena* temporary_arena,
+                    CommandStream* stream,
                     std::string* error_message);
 };
 

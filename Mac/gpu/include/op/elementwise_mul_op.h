@@ -9,6 +9,7 @@
 namespace soc::gpu {
 
 class BufferArena;
+class CommandStream;
 class MetalContext;
 
 struct ElementwiseMulParams {
@@ -25,6 +26,7 @@ public:
                     const DeviceTensor& output,
                     const ElementwiseMulParams& params,
                     BufferArena* temporary_arena,
+                    CommandStream* stream,
                     std::string* error_message);
 };
 

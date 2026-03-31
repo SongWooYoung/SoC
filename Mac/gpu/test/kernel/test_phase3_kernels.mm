@@ -153,7 +153,7 @@ int main() {
     const soc::gpu::DeviceTensor softmax_out_tensor(softmax_out_buffer, 0, soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, {2, 3}));
 
     soc::gpu::EmbeddingParams embedding_params;
-    if (!soc::gpu::EmbeddingOp::Run(*context, &pipeline_cache, id_tensor, embedding_tensor, embedding_out_tensor, embedding_params, arena.get(), &error_message)) {
+    if (!soc::gpu::EmbeddingOp::Run(*context, &pipeline_cache, id_tensor, embedding_tensor, embedding_out_tensor, embedding_params, arena.get(), nullptr, &error_message)) {
         std::cerr << "Embedding dispatch failed: " << error_message << '\n';
         return 1;
     }
@@ -163,13 +163,13 @@ int main() {
     rope_params.head_dim = 4;
     rope_params.rotary_dim = 4;
     rope_params.position_offset = 3;
-    if (!soc::gpu::RopeOp::Run(*context, &pipeline_cache, rope_in_tensor, rope_out_tensor, rope_params, arena.get(), &error_message)) {
+    if (!soc::gpu::RopeOp::Run(*context, &pipeline_cache, rope_in_tensor, rope_out_tensor, rope_params, arena.get(), nullptr, &error_message)) {
         std::cerr << "RoPE dispatch failed: " << error_message << '\n';
         return 1;
     }
 
     soc::gpu::SoftmaxParams softmax_params;
-    if (!soc::gpu::SoftmaxOp::Run(*context, &pipeline_cache, softmax_in_tensor, softmax_out_tensor, softmax_params, arena.get(), &error_message)) {
+    if (!soc::gpu::SoftmaxOp::Run(*context, &pipeline_cache, softmax_in_tensor, softmax_out_tensor, softmax_params, arena.get(), nullptr, &error_message)) {
         std::cerr << "Softmax dispatch failed: " << error_message << '\n';
         return 1;
     }

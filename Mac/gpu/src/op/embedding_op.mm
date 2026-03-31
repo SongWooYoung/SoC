@@ -4,6 +4,7 @@
 #include "op/embedding_op.h"
 
 #include "buffer/buffer_arena.h"
+#include "metal/command_stream.h"
 #include "metal/metal_context.h"
 
 namespace soc::gpu {
@@ -57,6 +58,7 @@ bool EmbeddingOp::Run(const MetalContext& context,
                       const DeviceTensor& output,
                       const EmbeddingParams& params,
                       BufferArena* temporary_arena,
+                      CommandStream* stream,
                       std::string* error_message) {
     if (pipeline_cache == nullptr) {
         if (error_message != nullptr) {
@@ -113,8 +115,7 @@ bool EmbeddingOp::Run(const MetalContext& context,
     }
 
     @autoreleasepool {
-        BufferArenaMarkGuard arena_mark(temporary_arena, "EmbeddingOp");
-        id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+        BufferArenaMarkGuard arena_mark(stream != nullptr ? nullptr : temporary_arena, "EmbeddingOp");
         id<MTLComputePipelineState> pipeline = (__bridge id<MTLComputePipelineState>)pipeline_handle;
         id<MTLBuffer> id_buffer = (__bridge id<MTLBuffer>)token_ids.GetBuffer()->GetNativeHandle();
         id<MTLBuffer> table_buffer = (__bridge id<MTLBuffer>)embedding_table.GetBuffer()->GetNativeHandle();
@@ -127,9 +128,22 @@ bool EmbeddingOp::Run(const MetalContext& context,
             return false;
         }
 
-        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-        if (command_buffer == nil || encoder == nil) {
+        id<MTLComputeCommandEncoder> encoder = nil;
+        id<MTLCommandBuffer> command_buffer = nil;
+        if (stream != nullptr) {
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+        } else {
+            id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+            command_buffer = [command_queue commandBuffer];
+            if (command_buffer == nil) {
+                if (error_message != nullptr) {
+                    *error_message = "Failed to create embedding command objects";
+                }
+                return false;
+            }
+            encoder = [command_buffer computeCommandEncoder];
+        }
+        if (encoder == nil) {
             if (error_message != nullptr) {
                 *error_message = "Failed to create embedding command objects";
             }
@@ -144,11 +158,16 @@ bool EmbeddingOp::Run(const MetalContext& context,
 
         [encoder dispatchThreads:MTLSizeMake(hidden_size, token_count, 1)
                  threadsPerThreadgroup:MTLSizeMake(key.threadgroup_width, 1, 1)];
-        [encoder endEncoding];
-        if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
-                                           "Embedding command buffer failed",
-                                           error_message)) {
-            return false;
+
+        if (stream != nullptr) {
+            stream->EndEncoder();
+        } else {
+            [encoder endEncoding];
+            if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
+                                               "Embedding command buffer failed",
+                                               error_message)) {
+                return false;
+            }
         }
     }
 

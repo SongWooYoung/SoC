@@ -1,0 +1,13 @@
+# Python 3.11 dependencies for Mac GPU/CPU inference benchmarking
+# Install: python3.11 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+
+# Model export (HuggingFace -> C++ bundle)
+huggingface_hub>=0.31.0
+safetensors>=0.4.5
+transformers>=4.51.0
+
+# PyTorch with MPS (Metal) backend for Apple Silicon
+torch>=2.2.0
+
+# Benchmark utilities
+numpy>=1.24.0

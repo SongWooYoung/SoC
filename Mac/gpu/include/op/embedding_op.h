@@ -9,6 +9,7 @@
 namespace soc::gpu {
 
 class BufferArena;
+class CommandStream;
 class MetalContext;
 
 struct EmbeddingParams {
@@ -26,6 +27,7 @@ public:
                     const DeviceTensor& output,
                     const EmbeddingParams& params,
                     BufferArena* temporary_arena,
+                    CommandStream* stream,
                     std::string* error_message);
 };
 

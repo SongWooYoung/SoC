@@ -4,6 +4,7 @@
 #include "op/rms_norm_op.h"
 
 #include "buffer/buffer_arena.h"
+#include "metal/command_stream.h"
 #include "metal/metal_context.h"
 
 namespace soc::gpu {
@@ -110,6 +111,7 @@ bool RmsNormOp::Run(const MetalContext& context,
                     const DeviceTensor& output,
                     const RmsNormParams& params,
                     BufferArena* temporary_arena,
+                    CommandStream* stream,
                     std::string* error_message) {
     if (pipeline_cache == nullptr) {
         if (error_message != nullptr) {
@@ -145,8 +147,7 @@ bool RmsNormOp::Run(const MetalContext& context,
     }
 
     @autoreleasepool {
-        BufferArenaMarkGuard arena_mark(temporary_arena, "RmsNormOp");
-        id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+        BufferArenaMarkGuard arena_mark(stream != nullptr ? nullptr : temporary_arena, "RmsNormOp");
         id<MTLComputePipelineState> pipeline = (__bridge id<MTLComputePipelineState>)pipeline_handle;
         id<MTLBuffer> input_buffer = (__bridge id<MTLBuffer>)input.GetBuffer()->GetNativeHandle();
         id<MTLBuffer> weight_buffer = (__bridge id<MTLBuffer>)weight.GetBuffer()->GetNativeHandle();
@@ -159,15 +160,21 @@ bool RmsNormOp::Run(const MetalContext& context,
             return false;
         }
 
-        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-        if (command_buffer == nil) {
-            if (error_message != nullptr) {
-                *error_message = "Failed to create RMSNorm command buffer";
+        id<MTLComputeCommandEncoder> encoder = nil;
+        id<MTLCommandBuffer> command_buffer = nil;
+        if (stream != nullptr) {
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+        } else {
+            id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+            command_buffer = [command_queue commandBuffer];
+            if (command_buffer == nil) {
+                if (error_message != nullptr) {
+                    *error_message = "Failed to create RMSNorm command buffer";
+                }
+                return false;
             }
-            return false;
+            encoder = [command_buffer computeCommandEncoder];
         }
-
-        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
         if (encoder == nil) {
             if (error_message != nullptr) {
                 *error_message = "Failed to create RMSNorm compute encoder";
@@ -184,12 +191,16 @@ bool RmsNormOp::Run(const MetalContext& context,
         const MTLSize grid_size = MTLSizeMake(row_count, 1, 1);
         const MTLSize threadgroup_size = MTLSizeMake(1, 1, 1);
         [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
-        [encoder endEncoding];
 
-        if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
-                                           "RMSNorm command buffer failed",
-                                           error_message)) {
-            return false;
+        if (stream != nullptr) {
+            stream->EndEncoder();
+        } else {
+            [encoder endEncoding];
+            if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
+                                               "RMSNorm command buffer failed",
+                                               error_message)) {
+                return false;
+            }
         }
     }
 

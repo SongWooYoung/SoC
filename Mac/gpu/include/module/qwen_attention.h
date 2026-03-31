@@ -10,6 +10,7 @@
 namespace soc::gpu {
 
 class BufferArena;
+class CommandStream;
 class MetalContext;
 
 struct QwenAttentionWeights {
@@ -42,6 +43,7 @@ public:
                     const DeviceTensor& output,
                     const QwenAttentionParams& params,
                     BufferArena* temporary_arena,
+                    CommandStream* stream,
                     std::string* error_message);
 
     static bool RunPrefill(const MetalContext& context,
@@ -54,6 +56,7 @@ public:
                            const DeviceTensor& output,
                            const QwenAttentionParams& params,
                            BufferArena* temporary_arena,
+                           CommandStream* stream,
                            std::string* error_message);
 
     static bool RunDecode(const MetalContext& context,
@@ -66,6 +69,7 @@ public:
                           const DeviceTensor& output,
                           const QwenAttentionParams& params,
                           BufferArena* temporary_arena,
+                          CommandStream* stream,
                           std::string* error_message);
 };
 

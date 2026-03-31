@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "buffer/buffer_arena.h"
+#include "metal/command_stream.h"
 #include "metal/metal_context.h"
 
 namespace soc::gpu {
@@ -19,6 +20,7 @@ bool LinearOp::Run(const MetalContext& context,
                    const DeviceTensor& output,
                    const LinearParams& params,
                    BufferArena* temporary_arena,
+                   CommandStream* stream,
                    std::string* error_message) {
     MatMulParams fused_params = params.matmul;
     fused_params.enable_silu = params.activation == LinearActivation::kSiLU;
@@ -32,6 +34,7 @@ bool LinearOp::Run(const MetalContext& context,
                          output,
                          fused_params,
                          temporary_arena,
+                         stream,
                          error_message);
 }
 

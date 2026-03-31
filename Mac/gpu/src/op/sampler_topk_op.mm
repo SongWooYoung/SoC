@@ -4,6 +4,7 @@
 #include "op/sampler_topk_op.h"
 
 #include "buffer/buffer_arena.h"
+#include "metal/command_stream.h"
 #include "metal/metal_context.h"
 
 namespace soc::gpu {
@@ -57,6 +58,7 @@ bool SamplerTopKOp::Run(const MetalContext& context,
                         const DeviceTensor& top_indices,
                         const SamplerTopKParams& params,
                         BufferArena* temporary_arena,
+                        CommandStream* stream,
                         std::string* error_message) {
     if (pipeline_cache == nullptr) {
         if (error_message != nullptr) {
@@ -112,8 +114,7 @@ bool SamplerTopKOp::Run(const MetalContext& context,
     }
 
     @autoreleasepool {
-        BufferArenaMarkGuard arena_mark(temporary_arena, "SamplerTopKOp");
-        id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+        BufferArenaMarkGuard arena_mark(stream != nullptr ? nullptr : temporary_arena, "SamplerTopKOp");
         id<MTLComputePipelineState> pipeline = (__bridge id<MTLComputePipelineState>)pipeline_handle;
         id<MTLBuffer> logits_buffer = (__bridge id<MTLBuffer>)logits.GetBuffer()->GetNativeHandle();
         id<MTLBuffer> top_values_buffer = (__bridge id<MTLBuffer>)top_values.GetBuffer()->GetNativeHandle();
@@ -126,9 +127,22 @@ bool SamplerTopKOp::Run(const MetalContext& context,
             return false;
         }
 
-        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-        if (command_buffer == nil || encoder == nil) {
+        id<MTLComputeCommandEncoder> encoder = nil;
+        id<MTLCommandBuffer> command_buffer = nil;
+        if (stream != nullptr) {
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+        } else {
+            id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+            command_buffer = [command_queue commandBuffer];
+            if (command_buffer == nil) {
+                if (error_message != nullptr) {
+                    *error_message = "Failed to create sampler top-k command objects";
+                }
+                return false;
+            }
+            encoder = [command_buffer computeCommandEncoder];
+        }
+        if (encoder == nil) {
             if (error_message != nullptr) {
                 *error_message = "Failed to create sampler top-k command objects";
             }
@@ -141,11 +155,16 @@ bool SamplerTopKOp::Run(const MetalContext& context,
         [encoder setBuffer:top_indices_buffer offset:top_indices.GetByteOffset() atIndex:2];
         [encoder setBuffer:params_buffer offset:params_offset atIndex:3];
         [encoder dispatchThreads:MTLSizeMake(row_count, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
-        [encoder endEncoding];
-        if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
-                                           "Sampler top-k command buffer failed",
-                                           error_message)) {
-            return false;
+
+        if (stream != nullptr) {
+            stream->EndEncoder();
+        } else {
+            [encoder endEncoding];
+            if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
+                                               "Sampler top-k command buffer failed",
+                                               error_message)) {
+                return false;
+            }
         }
     }
 

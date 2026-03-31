@@ -1,6 +1,7 @@
 #include "model/qwen_causal_lm.h"
 
 #include "buffer/buffer_arena.h"
+#include "metal/command_stream.h"
 #include "op/embedding_op.h"
 #include "op/linear_op.h"
 #include "op/rms_norm_op.h"
@@ -100,6 +101,7 @@ bool RunBlockRange(const MetalContext& context,
                                   output,
                                   final_norm_params,
                                   temporary_arena,
+                                  nullptr,
                                   error_message);
         }
         return CopyTensorViaHost(input_hidden, output, error_message);
@@ -115,6 +117,12 @@ bool RunBlockRange(const MetalContext& context,
     }
 
     const bool decode_mode = token_count == 1;
+
+    CommandStream stream;
+    if (!stream.Begin(context, error_message)) {
+        return false;
+    }
+
     for (std::size_t layer_index = start_layer; layer_index < end_layer; ++layer_index) {
         const bool is_last_layer = layer_index + 1 == end_layer;
         const DeviceTensor layer_output = (!apply_final_norm && is_last_layer) ? output : scratch_hidden;
@@ -138,6 +146,7 @@ bool RunBlockRange(const MetalContext& context,
                              layer_output,
                              block_params,
                              temporary_arena,
+                             &stream,
                              error_message)
             : (decode_mode
                 ? QwenBlock::RunDecode(context,
@@ -149,6 +158,7 @@ bool RunBlockRange(const MetalContext& context,
                                        layer_output,
                                        block_params,
                                        temporary_arena,
+                                       &stream,
                                        error_message)
                 : QwenBlock::RunPrefill(context,
                                         pipeline_cache,
@@ -159,6 +169,7 @@ bool RunBlockRange(const MetalContext& context,
                                         layer_output,
                                         block_params,
                                         temporary_arena,
+                                        &stream,
                                         error_message));
         if (!block_ok) {
             return false;
@@ -175,21 +186,25 @@ bool RunBlockRange(const MetalContext& context,
     }
 
     if (!apply_final_norm) {
-        return true;
+        return stream.Flush(context, error_message);
     }
 
     RmsNormParams final_norm_params;
     final_norm_params.epsilon = params.rms_norm_eps;
     final_norm_params.row_count = static_cast<std::uint32_t>(token_count);
     final_norm_params.row_size = static_cast<std::uint32_t>(params.hidden_size);
-    return RmsNormOp::Run(context,
+    if (!RmsNormOp::Run(context,
                           pipeline_cache,
                           current_hidden,
                           weights.final_norm_weight,
                           output,
                           final_norm_params,
                           temporary_arena,
-                          error_message);
+                          &stream,
+                          error_message)) {
+        return false;
+    }
+    return stream.Flush(context, error_message);
 }
 
 }  // namespace
@@ -279,6 +294,7 @@ bool QwenCausalLM::ForwardHiddenRange(const MetalContext& context,
                           hidden_states,
                           embedding_params,
                           temporary_arena,
+                          nullptr,
                           error_message)) {
         return false;
     }
@@ -394,6 +410,7 @@ bool QwenCausalLM::ForwardHiddenCachedRange(const MetalContext& context,
                           hidden_states,
                           embedding_params,
                           temporary_arena,
+                          nullptr,
                           error_message)) {
         return false;
     }
@@ -531,6 +548,7 @@ bool QwenCausalLM::ComputeLogitsFromHidden(const MetalContext& context,
                          logits_output,
                          logits_params,
                          temporary_arena,
+                         nullptr,
                          error_message);
 }
 

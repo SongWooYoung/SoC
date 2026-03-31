@@ -7,6 +7,7 @@
 namespace soc::gpu {
 
 class BufferArena;
+class CommandStream;
 class MetalContext;
 
 enum class LinearActivation {
@@ -31,6 +32,7 @@ public:
                     const DeviceTensor& output,
                     const LinearParams& params,
                     BufferArena* temporary_arena,
+                    CommandStream* stream,
                     std::string* error_message);
 };
 

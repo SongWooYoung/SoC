@@ -29,6 +29,8 @@ MODULE_TEST_TARGET := test_qwen_modules
 RUNTIME_TEST_TARGET := test_generation_context
 INTEGRATION_TEST_TARGET := test_real_bundle_regression
 MATMUL_BENCH_TARGET := bench_matmul
+BASELINE_BENCH_TARGET := bench_baseline
+PHASE1_TEST_TARGET := test_phase1_batching
 MAIN_BIN := $(BIN_DIR)/$(MAIN_TARGET)
 INFER_BIN := $(BIN_DIR)/$(INFER_TARGET)
 BOOTSTRAP_TEST_BIN := $(BIN_DIR)/$(BOOTSTRAP_TEST_TARGET)
@@ -40,6 +42,8 @@ MODULE_TEST_BIN := $(BIN_DIR)/$(MODULE_TEST_TARGET)
 RUNTIME_TEST_BIN := $(BIN_DIR)/$(RUNTIME_TEST_TARGET)
 INTEGRATION_TEST_BIN := $(BIN_DIR)/$(INTEGRATION_TEST_TARGET)
 MATMUL_BENCH_BIN := $(BIN_DIR)/$(MATMUL_BENCH_TARGET)
+BASELINE_BENCH_BIN := $(BIN_DIR)/$(BASELINE_BENCH_TARGET)
+PHASE1_TEST_BIN := $(BIN_DIR)/$(PHASE1_TEST_TARGET)
 REAL_QWEN3_MANIFEST := $(abspath ../../models/cpp/qwen3-0.6b/manifest.json)
 SWEEP_SCRIPT := tools/run_real_bundle_sweep.sh
 REAL_BUNDLE_REPORT := $(abspath $(REPORT_DIR)/test_real_bundle_regression_report.md)
@@ -80,12 +84,15 @@ MODULE_TEST_OBJ := $(OBJ_DIR)/test/module/test_qwen_modules.o
 RUNTIME_TEST_OBJ := $(OBJ_DIR)/test/runtime/test_generation_context.o
 INTEGRATION_TEST_OBJ := $(OBJ_DIR)/test/integration/test_real_bundle_regression.o
 MATMUL_BENCH_OBJ := $(OBJ_DIR)/benchmark/bench_matmul.o
+BASELINE_BENCH_OBJ := $(OBJ_DIR)/test/gpu_optimization/bench_baseline.o
+PHASE1_TEST_OBJ := $(OBJ_DIR)/test/gpu_optimization/test_phase1_batching.o
+COMMAND_STREAM_OBJ := $(OBJ_DIR)/src/metal/command_stream.o
 AIR_FILE := $(AIR_DIR)/gpu_kernels.air
-DEPFILES := $(CPP_OBJS:.o=.d) $(MM_OBJS:.o=.d) $(CPU_CPP_OBJS:.o=.d) $(MAIN_OBJ:.o=.d) $(BOOTSTRAP_TEST_OBJ:.o=.d) $(RMSNORM_TEST_OBJ:.o=.d) $(LINEAR_TEST_OBJ:.o=.d) $(ASSET_TEST_OBJ:.o=.d) $(PHASE3_TEST_OBJ:.o=.d) $(MODULE_TEST_OBJ:.o=.d) $(RUNTIME_TEST_OBJ:.o=.d) $(INTEGRATION_TEST_OBJ:.o=.d) $(MATMUL_BENCH_OBJ:.o=.d)
+DEPFILES := $(CPP_OBJS:.o=.d) $(MM_OBJS:.o=.d) $(CPU_CPP_OBJS:.o=.d) $(MAIN_OBJ:.o=.d) $(BOOTSTRAP_TEST_OBJ:.o=.d) $(RMSNORM_TEST_OBJ:.o=.d) $(LINEAR_TEST_OBJ:.o=.d) $(ASSET_TEST_OBJ:.o=.d) $(PHASE3_TEST_OBJ:.o=.d) $(MODULE_TEST_OBJ:.o=.d) $(RUNTIME_TEST_OBJ:.o=.d) $(INTEGRATION_TEST_OBJ:.o=.d) $(MATMUL_BENCH_OBJ:.o=.d) $(BASELINE_BENCH_OBJ:.o=.d)
 
 DEPFILES += $(INFER_OBJ:.o=.d)
 
-.PHONY: all build-shaders build-main build-infer build-tests build-benchmarks check integration integration-real-bundle integration-sweep integration-sweep-quick run infer benchmark benchmark-layer-split regression real-bundle-regression real-bundle-regression-quick clean
+.PHONY: all build-shaders build-main build-infer build-tests build-benchmarks bench-baseline check integration integration-real-bundle integration-sweep integration-sweep-quick run infer benchmark benchmark-layer-split regression real-bundle-regression real-bundle-regression-quick clean
 
 all: build-main
 
@@ -102,7 +109,13 @@ build-infer: $(INFER_BIN)
 
 build-tests: $(BOOTSTRAP_TEST_BIN) $(RMSNORM_TEST_BIN) $(LINEAR_TEST_BIN) $(ASSET_TEST_BIN) $(PHASE3_TEST_BIN) $(MODULE_TEST_BIN) $(RUNTIME_TEST_BIN) $(INTEGRATION_TEST_BIN)
 
-build-benchmarks: $(MATMUL_BENCH_BIN)
+build-benchmarks: $(MATMUL_BENCH_BIN) $(BASELINE_BENCH_BIN)
+
+bench-baseline: $(BASELINE_BENCH_BIN)
+	$(BASELINE_BENCH_BIN)
+
+test-phase1: $(PHASE1_TEST_BIN)
+	$(PHASE1_TEST_BIN)
 
 check: $(BOOTSTRAP_TEST_BIN) $(RMSNORM_TEST_BIN) $(LINEAR_TEST_BIN) $(ASSET_TEST_BIN) $(PHASE3_TEST_BIN) $(MODULE_TEST_BIN) $(RUNTIME_TEST_BIN)
 	$(BOOTSTRAP_TEST_BIN)
@@ -219,6 +232,14 @@ $(INTEGRATION_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(INTEGRATION_TE
 $(MATMUL_BENCH_BIN): $(CPP_OBJS) $(MM_OBJS) $(MATMUL_BENCH_OBJ)
 	@mkdir -p $(BIN_DIR)
 	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(MATMUL_BENCH_OBJ) -o $@ $(LDFLAGS)
+
+$(BASELINE_BENCH_BIN): $(CPP_OBJS) $(MM_OBJS) $(BASELINE_BENCH_OBJ)
+	@mkdir -p $(BIN_DIR)
+	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(BASELINE_BENCH_OBJ) -o $@ $(LDFLAGS)
+
+$(PHASE1_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(PHASE1_TEST_OBJ)
+	@mkdir -p $(BIN_DIR)
+	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(PHASE1_TEST_OBJ) -o $@ $(LDFLAGS)
 
 $(METALLIB): $(AIR_FILE)
 	@mkdir -p $(SHADER_BUILD_DIR)

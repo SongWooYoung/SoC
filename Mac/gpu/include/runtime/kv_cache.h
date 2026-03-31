@@ -9,6 +9,7 @@
 
 namespace soc::gpu {
 
+class CommandStream;
 class MetalContext;
 
 struct KVCacheLayerView {
@@ -34,11 +35,13 @@ public:
                        std::size_t layer_index,
                        const DeviceTensor& keys,
                        const DeviceTensor& values,
+                       CommandStream* stream,
                        std::string* error_message);
     bool AppendDecodeToken(const MetalContext& context,
                            std::size_t layer_index,
                            const DeviceTensor& key,
                            const DeviceTensor& value,
+                           CommandStream* stream,
                            std::string* error_message);
     KVCacheLayerView ViewForLayer(std::size_t layer_index) const;
     std::size_t GetLayerCount() const;
@@ -60,6 +63,7 @@ private:
                        std::size_t layer_index,
                        std::size_t sequence_offset,
                        const DeviceTensor& source,
+                       CommandStream* stream,
                        std::string* error_message);
 
     std::shared_ptr<class MetalBuffer> key_buffer_;

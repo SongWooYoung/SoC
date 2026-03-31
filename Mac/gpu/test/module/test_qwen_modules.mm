@@ -418,6 +418,7 @@ int main() {
                                       attention_output_tensor,
                                       attention_params,
                                       arena.get(),
+                                      nullptr,
                                       &error_message)) {
         std::cerr << "QwenAttention failed: " << error_message << '\n';
         return 1;
@@ -444,6 +445,7 @@ int main() {
                                              prefill_output_tensor,
                                              attention_params,
                                              arena.get(),
+                                             nullptr,
                                              &error_message)) {
         std::cerr << "QwenAttention prefill failed: " << error_message << '\n';
         return 1;
@@ -464,6 +466,7 @@ int main() {
                                             decode_output_tensor,
                                             decode_attention_params,
                                             arena.get(),
+                                            nullptr,
                                             &error_message)) {
         std::cerr << "QwenAttention decode failed: " << error_message << '\n';
         return 1;
@@ -488,6 +491,7 @@ int main() {
                                 mlp_output_tensor,
                                 mlp_params,
                                 arena.get(),
+                                nullptr,
                                 &error_message)) {
         std::cerr << "QwenMLP failed: " << error_message << '\n';
         return 1;
@@ -509,6 +513,7 @@ int main() {
                                   block_output_tensor,
                                   block_params,
                                   arena.get(),
+                                  nullptr,
                                   &error_message)) {
         std::cerr << "QwenBlock failed: " << error_message << '\n';
         return 1;

@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "buffer/buffer_arena.h"
+#include "metal/command_stream.h"
 #include "metal/metal_context.h"
 #include "op/linear_op.h"
 #include "op/rms_norm_op.h"
@@ -184,6 +185,7 @@ bool DispatchAttentionScores(const MetalContext& context,
                              const DeviceTensor& scores,
                              const MetalAttentionScoreParams& params,
                              BufferArena* temporary_arena,
+                             CommandStream* stream,
                              std::string* error_message) {
     KernelKey key;
     key.kind = KernelKind::kAttentionScores;
@@ -196,7 +198,6 @@ bool DispatchAttentionScores(const MetalContext& context,
     }
 
     @autoreleasepool {
-        id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
         id<MTLComputePipelineState> pipeline = (__bridge id<MTLComputePipelineState>)pipeline_handle;
         id<MTLBuffer> query_buffer = (__bridge id<MTLBuffer>)queries.GetBuffer()->GetNativeHandle();
         id<MTLBuffer> key_buffer = (__bridge id<MTLBuffer>)keys.GetBuffer()->GetNativeHandle();
@@ -208,9 +209,22 @@ bool DispatchAttentionScores(const MetalContext& context,
             return false;
         }
 
-        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-        if (command_buffer == nil || encoder == nil) {
+        id<MTLComputeCommandEncoder> encoder = nil;
+        id<MTLCommandBuffer> command_buffer = nil;
+        if (stream != nullptr) {
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+        } else {
+            id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+            command_buffer = [command_queue commandBuffer];
+            if (command_buffer == nil) {
+                if (error_message != nullptr) {
+                    *error_message = "Failed to create attention score command objects";
+                }
+                return false;
+            }
+            encoder = [command_buffer computeCommandEncoder];
+        }
+        if (encoder == nil) {
             if (error_message != nullptr) {
                 *error_message = "Failed to create attention score command objects";
             }
@@ -224,11 +238,16 @@ bool DispatchAttentionScores(const MetalContext& context,
         [encoder setBuffer:params_buffer offset:params_offset atIndex:3];
         [encoder dispatchThreads:MTLSizeMake(params.key_row_count, params.query_row_count * params.query_head_count, 1)
                  threadsPerThreadgroup:MTLSizeMake(key.threadgroup_width, key.threadgroup_height, 1)];
-        [encoder endEncoding];
-        if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
-                                           "Attention score command buffer failed",
-                                           error_message)) {
-            return false;
+
+        if (stream != nullptr) {
+            stream->EndEncoder();
+        } else {
+            [encoder endEncoding];
+            if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
+                                               "Attention score command buffer failed",
+                                               error_message)) {
+                return false;
+            }
         }
     }
 
@@ -242,6 +261,7 @@ bool DispatchAttentionValues(const MetalContext& context,
                              const DeviceTensor& output,
                              const MetalAttentionValueParams& params,
                              BufferArena* temporary_arena,
+                             CommandStream* stream,
                              std::string* error_message) {
     KernelKey key;
     key.kind = KernelKind::kAttentionValues;
@@ -254,7 +274,6 @@ bool DispatchAttentionValues(const MetalContext& context,
     }
 
     @autoreleasepool {
-        id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
         id<MTLComputePipelineState> pipeline = (__bridge id<MTLComputePipelineState>)pipeline_handle;
         id<MTLBuffer> probability_buffer = (__bridge id<MTLBuffer>)probabilities.GetBuffer()->GetNativeHandle();
         id<MTLBuffer> value_buffer = (__bridge id<MTLBuffer>)values.GetBuffer()->GetNativeHandle();
@@ -266,9 +285,22 @@ bool DispatchAttentionValues(const MetalContext& context,
             return false;
         }
 
-        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-        if (command_buffer == nil || encoder == nil) {
+        id<MTLComputeCommandEncoder> encoder = nil;
+        id<MTLCommandBuffer> command_buffer = nil;
+        if (stream != nullptr) {
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+        } else {
+            id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+            command_buffer = [command_queue commandBuffer];
+            if (command_buffer == nil) {
+                if (error_message != nullptr) {
+                    *error_message = "Failed to create attention value command objects";
+                }
+                return false;
+            }
+            encoder = [command_buffer computeCommandEncoder];
+        }
+        if (encoder == nil) {
             if (error_message != nullptr) {
                 *error_message = "Failed to create attention value command objects";
             }
@@ -282,11 +314,16 @@ bool DispatchAttentionValues(const MetalContext& context,
         [encoder setBuffer:params_buffer offset:params_offset atIndex:3];
         [encoder dispatchThreads:MTLSizeMake(params.head_dim, params.query_row_count * params.query_head_count, 1)
                  threadsPerThreadgroup:MTLSizeMake(key.threadgroup_width, key.threadgroup_height, 1)];
-        [encoder endEncoding];
-        if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
-                                           "Attention value command buffer failed",
-                                           error_message)) {
-            return false;
+
+        if (stream != nullptr) {
+            stream->EndEncoder();
+        } else {
+            [encoder endEncoding];
+            if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
+                                               "Attention value command buffer failed",
+                                               error_message)) {
+                return false;
+            }
         }
     }
 
@@ -306,6 +343,7 @@ bool RunAttentionInternal(const MetalContext& context,
                           const DeviceTensor& output,
                           const QwenAttentionParams& params,
                           BufferArena* temporary_arena,
+                          CommandStream* stream,
                           std::string* error_message);
 
 bool QwenAttention::Run(const MetalContext& context,
@@ -316,6 +354,7 @@ bool QwenAttention::Run(const MetalContext& context,
                         const DeviceTensor& output,
                         const QwenAttentionParams& params,
                         BufferArena* temporary_arena,
+                        CommandStream* stream,
                         std::string* error_message) {
     return RunAttentionInternal(context,
                                 pipeline_cache,
@@ -328,6 +367,7 @@ bool QwenAttention::Run(const MetalContext& context,
                                 output,
                                 params,
                                 temporary_arena,
+                                stream,
                                 error_message);
 }
 
@@ -341,6 +381,7 @@ bool QwenAttention::RunPrefill(const MetalContext& context,
                                const DeviceTensor& output,
                                const QwenAttentionParams& params,
                                BufferArena* temporary_arena,
+                               CommandStream* stream,
                                std::string* error_message) {
     return RunAttentionInternal(context,
                                 pipeline_cache,
@@ -353,6 +394,7 @@ bool QwenAttention::RunPrefill(const MetalContext& context,
                                 output,
                                 params,
                                 temporary_arena,
+                                stream,
                                 error_message);
 }
 
@@ -366,6 +408,7 @@ bool QwenAttention::RunDecode(const MetalContext& context,
                               const DeviceTensor& output,
                               const QwenAttentionParams& params,
                               BufferArena* temporary_arena,
+                              CommandStream* stream,
                               std::string* error_message) {
     return RunAttentionInternal(context,
                                 pipeline_cache,
@@ -378,6 +421,7 @@ bool QwenAttention::RunDecode(const MetalContext& context,
                                 output,
                                 params,
                                 temporary_arena,
+                                stream,
                                 error_message);
 }
 
@@ -392,6 +436,7 @@ bool RunAttentionInternal(const MetalContext& context,
                           const DeviceTensor& output,
                           const QwenAttentionParams& params,
                           BufferArena* temporary_arena,
+                          CommandStream* stream,
                           std::string* error_message) {
     if (pipeline_cache == nullptr) {
         if (error_message != nullptr) {
@@ -486,6 +531,7 @@ bool RunAttentionInternal(const MetalContext& context,
                        query_proj,
                        q_params,
                        temporary_arena,
+                       stream,
                        error_message)) {
         return false;
     }
@@ -501,6 +547,7 @@ bool RunAttentionInternal(const MetalContext& context,
                        key_proj,
                        k_params,
                        temporary_arena,
+                       stream,
                        error_message) ||
         !LinearOp::Run(context,
                        pipeline_cache,
@@ -511,6 +558,7 @@ bool RunAttentionInternal(const MetalContext& context,
                        value_proj,
                        k_params,
                        temporary_arena,
+                       stream,
                        error_message)) {
         return false;
     }
@@ -543,6 +591,7 @@ bool RunAttentionInternal(const MetalContext& context,
                         query_heads,
                         q_norm_params,
                         temporary_arena,
+                        stream,
                         error_message)) {
         return false;
     }
@@ -558,6 +607,7 @@ bool RunAttentionInternal(const MetalContext& context,
                         key_heads,
                         k_norm_params,
                         temporary_arena,
+                        stream,
                         error_message)) {
         return false;
     }
@@ -575,6 +625,7 @@ bool RunAttentionInternal(const MetalContext& context,
                      query_rope,
                      q_rope_params,
                      temporary_arena,
+                     stream,
                      error_message)) {
         return false;
     }
@@ -587,6 +638,7 @@ bool RunAttentionInternal(const MetalContext& context,
                      key_rope,
                      k_rope_params,
                      temporary_arena,
+                     stream,
                      error_message)) {
         return false;
     }
@@ -599,11 +651,11 @@ bool RunAttentionInternal(const MetalContext& context,
         const KVCacheLayerView existing_view = kv_cache->ViewForLayer(layer_index);
         sequence_length_before_append = existing_view.sequence_length;
         if (decode_mode) {
-            if (!kv_cache->AppendDecodeToken(context, layer_index, key_rope, value_proj, error_message)) {
+            if (!kv_cache->AppendDecodeToken(context, layer_index, key_rope, value_proj, stream, error_message)) {
                 return false;
             }
         } else {
-            if (!kv_cache->AppendPrefill(context, layer_index, key_rope, value_proj, error_message)) {
+            if (!kv_cache->AppendPrefill(context, layer_index, key_rope, value_proj, stream, error_message)) {
                 return false;
             }
         }
@@ -637,6 +689,7 @@ bool RunAttentionInternal(const MetalContext& context,
                                  attention_scores,
                                  score_params,
                                  temporary_arena,
+                                 stream,
                                  error_message)) {
         return false;
     }
@@ -650,6 +703,7 @@ bool RunAttentionInternal(const MetalContext& context,
                         attention_probs,
                         softmax_params,
                         temporary_arena,
+                        stream,
                         error_message)) {
         return false;
     }
@@ -668,6 +722,7 @@ bool RunAttentionInternal(const MetalContext& context,
                                  attention_context,
                                  value_params,
                                  temporary_arena,
+                                 stream,
                                  error_message)) {
         return false;
     }
@@ -688,6 +743,7 @@ bool RunAttentionInternal(const MetalContext& context,
                        output,
                        o_params,
                        temporary_arena,
+                       stream,
                        error_message)) {
         return false;
     }

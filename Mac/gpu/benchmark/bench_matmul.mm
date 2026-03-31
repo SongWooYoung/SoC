@@ -165,6 +165,7 @@ bool RunScenario(const BenchmarkScenario& scenario,
                                          output_tensor,
                                          params,
                                          arena,
+                                         nullptr,
                                          error_message)) {
                 return false;
             }
@@ -182,6 +183,7 @@ bool RunScenario(const BenchmarkScenario& scenario,
                                          output_tensor,
                                          params,
                                          arena,
+                                         nullptr,
                                          error_message)) {
                 return false;
             }

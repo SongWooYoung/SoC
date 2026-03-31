@@ -9,6 +9,7 @@
 namespace soc::gpu {
 
 class BufferArena;
+class CommandStream;
 class MetalContext;
 
 struct SoftmaxParams {
@@ -24,6 +25,7 @@ public:
                     const DeviceTensor& output,
                     const SoftmaxParams& params,
                     BufferArena* temporary_arena,
+                    CommandStream* stream,
                     std::string* error_message);
 };
 
