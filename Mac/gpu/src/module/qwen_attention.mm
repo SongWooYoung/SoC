@@ -315,7 +315,7 @@ bool DispatchAttentionScores(const MetalContext& context,
         id<MTLComputeCommandEncoder> encoder = nil;
         id<MTLCommandBuffer> command_buffer = nil;
         if (stream != nullptr) {
-            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->GetOrCreateComputeEncoder();
         } else {
             id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
             command_buffer = [command_queue commandBuffer];
@@ -342,9 +342,7 @@ bool DispatchAttentionScores(const MetalContext& context,
         [encoder dispatchThreads:MTLSizeMake(params.key_row_count, params.query_row_count * params.query_head_count, 1)
                  threadsPerThreadgroup:MTLSizeMake(key.threadgroup_width, key.threadgroup_height, 1)];
 
-        if (stream != nullptr) {
-            stream->EndEncoder();
-        } else {
+        if (stream == nullptr) {
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "Attention score command buffer failed",
@@ -393,7 +391,7 @@ bool DispatchAttentionValues(const MetalContext& context,
         id<MTLComputeCommandEncoder> encoder = nil;
         id<MTLCommandBuffer> command_buffer = nil;
         if (stream != nullptr) {
-            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->GetOrCreateComputeEncoder();
         } else {
             id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
             command_buffer = [command_queue commandBuffer];
@@ -420,9 +418,7 @@ bool DispatchAttentionValues(const MetalContext& context,
         [encoder dispatchThreads:MTLSizeMake(params.head_dim, params.query_row_count * params.query_head_count, 1)
                  threadsPerThreadgroup:MTLSizeMake(key.threadgroup_width, key.threadgroup_height, 1)];
 
-        if (stream != nullptr) {
-            stream->EndEncoder();
-        } else {
+        if (stream == nullptr) {
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "Attention value command buffer failed",

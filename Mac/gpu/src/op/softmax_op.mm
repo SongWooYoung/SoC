@@ -111,7 +111,7 @@ bool SoftmaxOp::Run(const MetalContext& context,
         id<MTLComputeCommandEncoder> encoder = nil;
         id<MTLCommandBuffer> command_buffer = nil;
         if (stream != nullptr) {
-            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->GetOrCreateComputeEncoder();
         } else {
             id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
             command_buffer = [command_queue commandBuffer];
@@ -136,9 +136,7 @@ bool SoftmaxOp::Run(const MetalContext& context,
         [encoder setBuffer:params_buffer offset:params_offset atIndex:2];
         [encoder dispatchThreads:MTLSizeMake(row_count, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
 
-        if (stream != nullptr) {
-            stream->EndEncoder();
-        } else {
+        if (stream == nullptr) {
             [encoder endEncoding];
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "Softmax command buffer failed",
