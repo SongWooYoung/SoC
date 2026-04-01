@@ -864,6 +864,7 @@ bool RunAttentionInternal(const MetalContext& context,
     DeviceTensor score_keys = key_rope;
     DeviceTensor score_values = value_proj;
     std::size_t total_sequence_length = row_count;
+    const bool defer_prefill_cache_append = !decode_mode && kv_cache != nullptr;
     if (kv_cache != nullptr) {
         const KVCacheLayerView existing_view = kv_cache->ViewForLayer(layer_index);
         sequence_length_before_append = existing_view.sequence_length;
@@ -871,15 +872,29 @@ bool RunAttentionInternal(const MetalContext& context,
             if (!kv_cache->AppendDecodeToken(context, layer_index, key_rope, value_proj, active_stream, error_message)) {
                 return false;
             }
-        } else {
+        } else if (!defer_prefill_cache_append) {
             if (!kv_cache->AppendPrefill(context, layer_index, key_rope, value_proj, active_stream, error_message)) {
                 return false;
             }
         }
-        const KVCacheLayerView full_view = kv_cache->ViewForLayer(layer_index);
-        score_keys = full_view.keys;
-        score_values = full_view.values;
-        total_sequence_length = full_view.sequence_length;
+        if (decode_mode) {
+            const KVCacheLayerView full_view = kv_cache->ViewForLayer(layer_index);
+            score_keys = full_view.keys;
+            score_values = full_view.values;
+            total_sequence_length = full_view.sequence_length;
+        } else if (sequence_length_before_append == 0) {
+            score_keys = key_rope;
+            score_values = value_proj;
+            total_sequence_length = row_count;
+        } else {
+            if (!kv_cache->AppendPrefill(context, layer_index, key_rope, value_proj, active_stream, error_message)) {
+                return false;
+            }
+            const KVCacheLayerView full_view = kv_cache->ViewForLayer(layer_index);
+            score_keys = full_view.keys;
+            score_values = full_view.values;
+            total_sequence_length = full_view.sequence_length;
+        }
     }
 
     const TensorDesc score_runtime_desc =
@@ -1004,6 +1019,12 @@ bool RunAttentionInternal(const MetalContext& context,
                            temporary_arena,
                            tail_active_stream,
                            error_message)) {
+            return false;
+        }
+    }
+
+    if (defer_prefill_cache_append) {
+        if (!kv_cache->AppendPrefill(context, layer_index, key_rope, value_proj, tail_active_stream, error_message)) {
             return false;
         }
     }
