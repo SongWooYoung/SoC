@@ -40,6 +40,8 @@ struct CliOptions {
     std::string prompt;
     std::string prompt_file;
     std::string output_file;
+    std::string prompt_cache_artifact_save;
+    std::string prompt_cache_artifact_load;
     RuntimeGenerationOptions generation;
     RuntimePromptOptions prompt_options;
     std::size_t temporary_arena_bytes = 1ull << 26;
@@ -65,6 +67,10 @@ struct InferenceRunResult {
     std::string generated_text;
     double wall_ms = 0.0;
     double gpu_ms = 0.0;
+    double prefill_ms = 0.0;
+    double decode_ms = 0.0;
+    double prompt_cache_load_ms = 0.0;
+    std::string prompt_cache_mode = "disabled";
     soc::gpu::MetalProfilingSnapshot profile;
 };
 
@@ -76,6 +82,8 @@ struct InferenceRunResult {
         << "  --prompt <text>            Prompt text to generate from\n"
         << "  --prompt-file <path>       Read prompt text from a UTF-8 text file ('-' reads stdin)\n"
         << "  --output-file <path>       Write the primary result payload to a file instead of stdout\n"
+        << "  --prompt-cache-artifact-save <path>  Save a prompt cache artifact after prefill\n"
+        << "  --prompt-cache-artifact-load <path>  Load a prompt cache artifact instead of running prefill\n"
         << "  --json                     Emit a JSON object instead of plain text\n"
         << "  --layer <k>                GPU prefix layers: 0=full CPU, 1..N-1=hybrid, N or -1=full GPU\n"
         << "  --max-new-tokens <n>       Number of tokens to generate\n"
@@ -130,6 +138,10 @@ CliOptions ParseArgs(int argc, char** argv) {
             options.prompt_file = require_value("--prompt-file");
         } else if (argument == "--output-file") {
             options.output_file = require_value("--output-file");
+        } else if (argument == "--prompt-cache-artifact-save") {
+            options.prompt_cache_artifact_save = require_value("--prompt-cache-artifact-save");
+        } else if (argument == "--prompt-cache-artifact-load") {
+            options.prompt_cache_artifact_load = require_value("--prompt-cache-artifact-load");
         } else if (argument == "--json") {
             options.json_output = true;
         } else if (argument == "--layer") {
@@ -172,6 +184,9 @@ CliOptions ParseArgs(int argc, char** argv) {
 
     if (options.prompt.empty() == options.prompt_file.empty()) {
         throw std::runtime_error("provide exactly one of --prompt or --prompt-file");
+    }
+    if (!options.prompt_cache_artifact_save.empty() && !options.prompt_cache_artifact_load.empty()) {
+        throw std::runtime_error("--prompt-cache-artifact-save and --prompt-cache-artifact-load are mutually exclusive");
     }
     if (options.temporary_arena_bytes == 0) {
         throw std::runtime_error("--temp-arena-bytes must be greater than zero");
@@ -429,6 +444,8 @@ InferenceRunResult RunFullGpuInference(const soc::gpu::MetalContext& context,
                                        soc::gpu::QwenCausalLM gpu_model,
                                        const RuntimeGenerationOptions& generation,
                                        const std::vector<int>& prompt_token_ids,
+                                       const std::string& prompt_cache_artifact_save,
+                                       const std::string& prompt_cache_artifact_load,
                                        const TokenizerRuntimeData& tokenizer_runtime,
                                        std::string* error_message) {
     InferenceRunResult run;
@@ -444,16 +461,49 @@ InferenceRunResult RunFullGpuInference(const soc::gpu::MetalContext& context,
 
     const Clock::time_point start_time = Clock::now();
     context.ResetProfiling();
-    if (!generation_context.Generate(context,
-                                     pipeline_cache,
-                                     prompt_token_ids,
-                                     generation.max_new_tokens,
-                                     generation.eos_token_id,
-                                     temporary_arena,
-                                     &run.generated_token_ids,
-                                     error_message)) {
+    if (prompt_cache_artifact_load.empty()) {
+        const Clock::time_point prefill_start_time = Clock::now();
+        if (!generation_context.Prefill(context,
+                                        pipeline_cache,
+                                        prompt_token_ids,
+                                        temporary_arena,
+                                        error_message)) {
+            return run;
+        }
+        run.prefill_ms = DurationMilliseconds(prefill_start_time, Clock::now());
+        run.prompt_cache_mode = prompt_cache_artifact_save.empty() ? "disabled" : "artifact-save";
+
+        if (!prompt_cache_artifact_save.empty() &&
+            !generation_context.SavePromptCacheArtifact(context, prompt_cache_artifact_save, error_message)) {
+            return run;
+        }
+    } else {
+        const Clock::time_point load_start_time = Clock::now();
+        if (!generation_context.LoadPromptCacheArtifact(context, prompt_cache_artifact_load, error_message)) {
+            return run;
+        }
+        run.prompt_cache_load_ms = DurationMilliseconds(load_start_time, Clock::now());
+        run.prefill_ms = run.prompt_cache_load_ms;
+        run.prompt_cache_mode = "artifact-load";
+        if (generation_context.prompt_token_ids() != prompt_token_ids) {
+            if (error_message != nullptr) {
+                *error_message = "loaded prompt cache artifact does not match prompt token ids";
+            }
+            return run;
+        }
+    }
+
+    const Clock::time_point decode_start_time = Clock::now();
+    if (!generation_context.GenerateFromLoadedPromptCache(context,
+                                                          pipeline_cache,
+                                                          generation.max_new_tokens,
+                                                          generation.eos_token_id,
+                                                          temporary_arena,
+                                                          &run.generated_token_ids,
+                                                          error_message)) {
         return run;
     }
+    run.decode_ms = DurationMilliseconds(decode_start_time, Clock::now());
     run.wall_ms = DurationMilliseconds(start_time, Clock::now());
     run.profile = context.GetProfilingSnapshot();
     run.gpu_ms = run.profile.gpu_ms;
@@ -538,6 +588,7 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
                                             0,
                                             plan.resolved_gpu_layers,
                                             false,
+                                            soc::gpu::RangeCommandStreamMode::kDefault,
                                             error_message)) {
         return run;
     }
@@ -586,6 +637,7 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
                                                 0,
                                                 plan.resolved_gpu_layers,
                                                 false,
+                                                soc::gpu::RangeCommandStreamMode::kDefault,
                                                 error_message)) {
             return run;
         }
@@ -617,6 +669,10 @@ std::string BuildPrimaryOutput(const CliOptions& options,
                                const std::vector<int>& prompt_token_ids,
                                const std::vector<int>& generated_token_ids,
                                const std::string& generated_text,
+                               const std::string& prompt_cache_mode,
+                               double prefill_ms,
+                               double decode_ms,
+                               double prompt_cache_load_ms,
                                const soc::gpu::MetalDeviceInfo& device_info,
                                double wall_ms,
                                double gpu_ms,
@@ -642,6 +698,10 @@ std::string BuildPrimaryOutput(const CliOptions& options,
     stream << "  \"generated_text\": \"" << JsonEscape(generated_text) << "\",\n";
     stream << "  \"prompt_token_ids\": " << JsonArray(prompt_token_ids) << ",\n";
     stream << "  \"generated_token_ids\": " << JsonArray(generated_token_ids) << ",\n";
+    stream << "  \"prompt_cache\": {\n";
+    stream << "    \"mode\": \"" << JsonEscape(prompt_cache_mode) << "\",\n";
+    stream << "    \"artifact_load_ms\": " << prompt_cache_load_ms << "\n";
+    stream << "  },\n";
     stream << "  \"execution\": {\n";
     stream << "    \"mode\": \"" << JsonEscape(plan.mode) << "\",\n";
     stream << "    \"requested_layer\": " << plan.requested_layer << ",\n";
@@ -659,6 +719,10 @@ std::string BuildPrimaryOutput(const CliOptions& options,
     stream << "    \"thread_execution_width\": " << device_info.thread_execution_width << "\n";
     stream << "  },\n";
     stream << "  \"timing\": {\n";
+    stream << "    \"prefill_ms\": " << prefill_ms << ",\n";
+    stream << "    \"decode_ms\": " << decode_ms << ",\n";
+    stream << "    \"prefill_tok_per_s\": " << (prefill_ms > 0.0 ? (prompt_token_ids.size() * 1000.0 / prefill_ms) : 0.0) << ",\n";
+    stream << "    \"decode_tok_per_s\": " << (decode_ms > 0.0 ? (generated_token_ids.size() * 1000.0 / decode_ms) : 0.0) << ",\n";
     stream << "    \"wall_ms\": " << wall_ms << ",\n";
     stream << "    \"gpu_ms\": " << gpu_ms << ",\n";
     stream << "    \"wait_ms\": " << profile.wait_ms << ",\n";
@@ -698,6 +762,10 @@ void PrintVerboseSummary(const CliOptions& options,
                          const std::string& prompt_text,
                          const std::vector<int>& prompt_token_ids,
                          const std::vector<int>& generated_token_ids,
+                         const std::string& prompt_cache_mode,
+                         double prefill_ms,
+                         double decode_ms,
+                         double prompt_cache_load_ms,
                          const soc::gpu::MetalDeviceInfo& device_info,
                          double wall_ms,
                          double gpu_ms,
@@ -713,6 +781,7 @@ void PrintVerboseSummary(const CliOptions& options,
     std::cerr << "execution_mode=" << plan.mode << "\n";
     std::cerr << "requested_layer=" << plan.requested_layer << " resolved_gpu_layers=" << plan.resolved_gpu_layers << " model_layer_count=" << plan.model_layer_count << "\n";
     std::cerr << "device=" << device_info.name << "\n";
+    std::cerr << "prompt_cache_mode=" << prompt_cache_mode << "\n";
     std::cerr << "max_new_tokens=" << generated_token_ids.size() << "\n";
     if (prepared_prompt != prompt_text) {
         std::cerr << "serialized_prompt=" << prepared_prompt << "\n";
@@ -721,6 +790,9 @@ void PrintVerboseSummary(const CliOptions& options,
     PrintTokenIds(std::cerr, "generated_token_ids", generated_token_ids);
     std::cerr << "wall_ms=" << wall_ms << "\n";
     std::cerr << "gpu_ms=" << gpu_ms << "\n";
+    std::cerr << "prefill_ms=" << prefill_ms << "\n";
+    std::cerr << "decode_ms=" << decode_ms << "\n";
+    std::cerr << "prompt_cache_load_ms=" << prompt_cache_load_ms << "\n";
     std::cerr << "wait_ms=" << profile.wait_ms << "\n";
     std::cerr << "command_buffer_count=" << profile.command_buffer_count << "\n";
     std::cerr << "encoder_count=" << profile.encoder_count << "\n";
@@ -746,6 +818,9 @@ int main(int argc, char** argv) {
         const std::string prepared_prompt = RuntimePipeline::PreparePrompt(tokenizer_runtime, prompt_text, options.prompt_options);
         const TokenizerRuntime tokenizer(tokenizer_runtime);
         const std::vector<int> prompt_token_ids = tokenizer.Encode(prepared_prompt);
+        if ((!options.prompt_cache_artifact_save.empty() || !options.prompt_cache_artifact_load.empty()) && plan.mode != "full-gpu") {
+            throw std::runtime_error("prompt cache artifacts are only supported in full-gpu mode");
+        }
 
         std::string error_message;
         auto context = soc::gpu::MetalContext::CreateDefault(options.metallib_path,
@@ -803,6 +878,8 @@ int main(int argc, char** argv) {
                                       std::move(gpu_model),
                                       generation,
                                       prompt_token_ids,
+                                      options.prompt_cache_artifact_save,
+                                      options.prompt_cache_artifact_load,
                                       tokenizer_runtime,
                                       &error_message);
         }
@@ -818,6 +895,10 @@ int main(int argc, char** argv) {
                                                        prompt_token_ids,
                                                        run.generated_token_ids,
                                                        run.generated_text,
+                                                       run.prompt_cache_mode,
+                                                       run.prefill_ms,
+                                                       run.decode_ms,
+                                                       run.prompt_cache_load_ms,
                                                        context->GetDeviceInfo(),
                                                        run.wall_ms,
                                                        run.gpu_ms,
@@ -831,6 +912,10 @@ int main(int argc, char** argv) {
                                 prompt_text,
                                 prompt_token_ids,
                                 run.generated_token_ids,
+                                run.prompt_cache_mode,
+                                run.prefill_ms,
+                                run.decode_ms,
+                                run.prompt_cache_load_ms,
                                 context->GetDeviceInfo(),
                                 run.wall_ms,
                                 run.gpu_ms,

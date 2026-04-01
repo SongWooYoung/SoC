@@ -137,3 +137,41 @@
 ## 우리 코드에 대한 결론
 
 `flash-moe`가 주는 가장 큰 교훈은 "GPU kernel만 잘 짜면 된다"가 아니라, Apple Silicon에서는 메모리 시스템과 스케줄링을 같이 봐야 한다는 점이다. 우리 쪽에서는 I/O 스트리밍 대신 dense float weight bandwidth가 병목이지만, end-to-end 기준으로 micro-optimization을 계속 검증해야 한다는 점은 완전히 같다.
+
+## 2026-04-01 GitHub 재검토: prefill / decode 최적화
+
+GitHub 메인라인에서 다시 확인한 핵심 파일은 다음과 같다.
+
+- `metal_infer/infer.m`
+- `metal_infer/main.m`
+- `metal_infer/shaders.metal`
+- `docs/optimization-experiments-q4.md`
+- `paper/flash_moe.tex`
+
+### prefill에 해당하는 최적화
+
+이 레포는 본질적으로 token-by-token decode 엔진이라 `prefill`이 1급 시민은 아니다. 그래도 우리 기준에서 prefill에 대응되는 최적화는 분명히 있다.
+
+1. shared input을 여러 projection에 재사용하는 경우 `BatchMatvecSpec`와 `gpu_batch_matvec()`로 한 command buffer 안에 여러 matvec를 encode한다.
+2. `Q/K/V` projection은 `fast_batch_matvec()`로 3개를 한 번에 처리한다. input 복사는 한 번만 하고 output slot만 나눠 쓴다.
+3. 긴 sequence에서는 `gpu_attn_fuse`를 `kv->len >= 32`에서만 켠다. 즉 짧은 구간에서는 GPU attention보다 encoder overhead가 더 크다고 보고 조건부로만 활성화한다.
+4. 문서화된 실험 결과상 isolated kernel win은 end-to-end에서 자주 깨졌고, 그래서 `docs/optimization-experiments-q4.md`에 kept/rejected를 명시적으로 분리한다.
+
+### decode에서 실제로 하는 일
+
+1. decode hot path는 `CMD1/CMD2/CMD3` 3단계 구조다. attention projection, mid-layer combine, expert forward를 나눠 queue serialization을 이용한다.
+2. `CMD1`에서는 attention projection batch와 linear attention 관련 보조 kernel을 먼저 밀고, `CMD2`에서는 `o_proj + residual + norm + routing`을 합친다.
+3. `CMD3`는 expert gate/up/down, shared SwiGLU/down, combine/residual/norm까지 encode한 뒤 commit만 하고 wait는 미룬다.
+4. I/O는 `pread`를 병렬화하고, 다음 token에서 쓸 expert를 prediction 기반으로 미리 읽는다. 즉 decode 최적화가 compute만이 아니라 DMA와 queue overlap까지 포함한다.
+5. kernel 쪽은 `dequant_matvec_4bit_v3`, `swiglu_fused_vec4`, batched matvec, weighted sum처럼 low-bit fused decode matvec가 중심이다.
+
+### 지금 우리에게 바로 적용할 점
+
+1. dense path에서도 `shared input -> 여러 projection` 패턴은 `BatchMatvecSpec`처럼 명시적 spec 배열로 만들 가치가 있다. 지금의 bounded batch보다 한 단계 더 구조화된 형태다.
+2. `seq_len` 또는 `row_count` 기준으로 GPU path를 조건부 활성화해야 한다. 짧은 decode에서 GPU attention이나 sampler가 손해인 경우를 기본값으로 막아야 한다.
+3. `kept / rejected` 최적화 기록을 계속 강화해야 한다. `flash-moe`의 강점은 성공보다 실패 실험의 폐기 기준이 명확하다는 점이다.
+4. 다만 이 레포의 `CMD3 async`류 구조는 우리 환경에서는 giant scheduling fault 리스크가 커서 그대로 가져오면 안 된다.
+
+### 이번 재검토의 결론
+
+`flash-moe`의 prefill/decode 최적화는 "낮은 bitwidth의 fused matvec"과 "단계별 command-buffer 구조화"에 있다. 우리에게 유효한 건 `projection spec batching`, `shape/length gated fast path`, `low-bit fused decode projection`이고, 그대로 가져오면 안 되는 건 장거리 async overlap과 거대한 staged command chain이다.

@@ -266,6 +266,9 @@ int main() {
         {"decode_1x1024x1024_contiguous", 1, 1024, 1024, true, false, true, false, false, 5, 30, {{8, 1}, {16, 1}, {32, 1}}},
         {"decode_1x1024x2816_transposed", 1, 1024, 2816, true, true, true, false, false, 5, 30, {{8, 1}, {16, 1}, {32, 1}}},
         {"decode_1x1024x2816_contiguous", 1, 1024, 2816, true, false, true, false, false, 5, 30, {{8, 1}, {16, 1}, {32, 1}}},
+        {"decode_1x2816x1024_transposed", 1, 2816, 1024, true, true, true, false, false, 5, 30, {{8, 1}, {16, 1}, {32, 1}}},
+        {"decode_1x1024x2816_transposed_silu", 1, 1024, 2816, true, true, true, false, true, 5, 30, {{8, 1}, {16, 1}, {32, 1}}},
+        {"decode_1x2816x1024_transposed_residual", 1, 2816, 1024, true, true, true, true, false, 5, 30, {{8, 1}, {16, 1}, {32, 1}}},
         {"prefill_8x512x512_transposed", 8, 512, 512, false, true, true, false, false, 5, 20, {{4, 2}, {8, 2}, {8, 4}, {16, 4}}},
     };
 

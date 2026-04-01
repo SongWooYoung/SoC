@@ -3,12 +3,19 @@
 
 #include "runtime/kv_cache.h"
 
+#include <cstdint>
+
 #include "buffer/metal_buffer.h"
 #include "metal/command_stream.h"
 #include "metal/metal_context.h"
 
 namespace soc::gpu {
 namespace {
+
+bool DisableKvCacheBatch() {
+    const char* value = std::getenv("SOC_GPU_DISABLE_KV_CACHE_BATCH");
+    return value != nullptr && std::string(value) == "1";
+}
 
 bool ValidateAppendTensor(const DeviceTensor& tensor,
                           std::size_t expected_hidden_size,
@@ -26,6 +33,33 @@ bool ValidateAppendTensor(const DeviceTensor& tensor,
         return false;
     }
     return true;
+}
+
+bool CopyBufferToShared(const MetalContext& context,
+                       id<MTLBuffer> source,
+                       id<MTLBuffer> destination,
+                       std::size_t size_bytes,
+                       const char* profile_label,
+                       std::string* error_message) {
+    @autoreleasepool {
+        id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
+        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
+        id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
+        if (command_buffer == nil || encoder == nil) {
+            if (error_message != nullptr) {
+                *error_message = "Failed to create KVCache serialization blit command objects";
+            }
+            return false;
+        }
+
+        [encoder copyFromBuffer:source sourceOffset:0 toBuffer:destination destinationOffset:0 size:size_bytes];
+        [encoder endEncoding];
+        return context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
+                                             "KVCache serialization blit failed",
+                                             profile_label,
+                                             1,
+                                             error_message);
+    }
 }
 
 }  // namespace
@@ -109,10 +143,27 @@ bool KVCache::AppendPrefill(const MetalContext& context,
         return false;
     }
     const std::size_t sequence_offset = sequence_lengths_[layer_index];
-    if (!CopyIntoLayer(context, key_buffer_, layer_index, sequence_offset, keys, stream, error_message) ||
-        !CopyIntoLayer(context, value_buffer_, layer_index, sequence_offset, values, stream, error_message)) {
+    CommandStream local_stream;
+    CommandStream* active_stream = stream;
+    const bool use_local_decode_batch = row_count == 1 && stream == nullptr && !DisableKvCacheBatch();
+    if (use_local_decode_batch) {
+        if (!local_stream.Begin(context, error_message)) {
+            return false;
+        }
+        active_stream = &local_stream;
+    }
+
+    if (!CopyIntoLayer(context, key_buffer_, layer_index, sequence_offset, keys, active_stream, error_message) ||
+        !CopyIntoLayer(context, value_buffer_, layer_index, sequence_offset, values, active_stream, error_message)) {
         return false;
     }
+
+    if (use_local_decode_batch) {
+        if (!local_stream.Flush(context, "KVCacheBlitBatch", error_message)) {
+            return false;
+        }
+    }
+
     sequence_lengths_[layer_index] += row_count;
     return true;
 }
@@ -133,6 +184,103 @@ bool KVCache::AppendDecodeToken(const MetalContext& context,
     return AppendPrefill(context, layer_index, key, value, stream, error_message);
 }
 
+bool KVCache::Serialize(const MetalContext& context,
+                        KVCacheSerializedState* state,
+                        std::string* error_message) const {
+    if (state == nullptr) {
+        if (error_message != nullptr) {
+            *error_message = "KVCache serialize requires a non-null state output";
+        }
+        return false;
+    }
+
+    state->layer_count = layer_count_;
+    state->key_value_head_count = key_value_head_count_;
+    state->head_dim = head_dim_;
+    state->max_sequence_length = max_sequence_length_;
+    state->sequence_lengths = sequence_lengths_;
+    state->key_bytes.assign(key_buffer_->GetSizeBytes(), 0);
+    state->value_bytes.assign(value_buffer_->GetSizeBytes(), 0);
+
+    auto key_staging = MetalBuffer::CreateShared(context, key_buffer_->GetSizeBytes(), "kv_cache_serialize_keys", error_message);
+    auto value_staging = MetalBuffer::CreateShared(context, value_buffer_->GetSizeBytes(), "kv_cache_serialize_values", error_message);
+    if (key_staging == nullptr || value_staging == nullptr) {
+        return false;
+    }
+
+    if (!CopyBufferToShared(context,
+                            (__bridge id<MTLBuffer>)key_buffer_->GetNativeHandle(),
+                            (__bridge id<MTLBuffer>)key_staging->GetNativeHandle(),
+                            key_buffer_->GetSizeBytes(),
+                            "KVCacheSerializeKeys",
+                            error_message) ||
+        !CopyBufferToShared(context,
+                            (__bridge id<MTLBuffer>)value_buffer_->GetNativeHandle(),
+                            (__bridge id<MTLBuffer>)value_staging->GetNativeHandle(),
+                            value_buffer_->GetSizeBytes(),
+                            "KVCacheSerializeValues",
+                            error_message)) {
+        return false;
+    }
+
+    return key_staging->Read(state->key_bytes.data(), state->key_bytes.size(), 0, error_message) &&
+           value_staging->Read(state->value_bytes.data(), state->value_bytes.size(), 0, error_message);
+}
+
+std::unique_ptr<KVCache> KVCache::Deserialize(const MetalContext& context,
+                                              const KVCacheSerializedState& state,
+                                              const std::string& label,
+                                              std::string* error_message) {
+    if (state.layer_count == 0 || state.key_value_head_count == 0 || state.head_dim == 0 ||
+        state.max_sequence_length == 0) {
+        if (error_message != nullptr) {
+            *error_message = "KVCache deserialize requires non-zero dimensions";
+        }
+        return nullptr;
+    }
+
+    const std::size_t hidden_size = state.key_value_head_count * state.head_dim;
+    const std::size_t expected_bytes = state.layer_count * state.max_sequence_length * hidden_size * sizeof(float);
+    if (state.sequence_lengths.size() != state.layer_count || state.key_bytes.size() != expected_bytes ||
+        state.value_bytes.size() != expected_bytes) {
+        if (error_message != nullptr) {
+            *error_message = "KVCache deserialize state dimensions do not match payload sizes";
+        }
+        return nullptr;
+    }
+    for (std::size_t sequence_length : state.sequence_lengths) {
+        if (sequence_length > state.max_sequence_length) {
+            if (error_message != nullptr) {
+                *error_message = "KVCache deserialize sequence length exceeds max_sequence_length";
+            }
+            return nullptr;
+        }
+    }
+
+    auto key_buffer = MetalBuffer::CreatePrivateInitialized(context,
+                                                            state.key_bytes.data(),
+                                                            state.key_bytes.size(),
+                                                            label + "_keys",
+                                                            error_message);
+    auto value_buffer = MetalBuffer::CreatePrivateInitialized(context,
+                                                              state.value_bytes.data(),
+                                                              state.value_bytes.size(),
+                                                              label + "_values",
+                                                              error_message);
+    if (key_buffer == nullptr || value_buffer == nullptr) {
+        return nullptr;
+    }
+
+    auto cache = std::unique_ptr<KVCache>(new KVCache(std::move(key_buffer),
+                                                      std::move(value_buffer),
+                                                      state.layer_count,
+                                                      state.key_value_head_count,
+                                                      state.head_dim,
+                                                      state.max_sequence_length));
+    cache->sequence_lengths_ = state.sequence_lengths;
+    return cache;
+}
+
 KVCacheLayerView KVCache::ViewForLayer(std::size_t layer_index) const {
     if (layer_index >= layer_count_) {
         return {};
@@ -143,6 +291,22 @@ KVCacheLayerView KVCache::ViewForLayer(std::size_t layer_index) const {
     return {DeviceTensor(key_buffer_, LayerByteOffset(layer_index), desc),
             DeviceTensor(value_buffer_, LayerByteOffset(layer_index), desc),
             sequence_length};
+}
+
+KVCacheByteRange KVCache::DescribeLayerByteRange(std::size_t layer_index) const {
+    if (layer_index >= layer_count_) {
+        return {};
+    }
+    return {LayerByteOffset(layer_index), GetLayerSpanBytes()};
+}
+
+KVCacheByteRange KVCache::DescribeLayerAppendByteRange(std::size_t layer_index, std::size_t row_count) const {
+    if (layer_index >= layer_count_ || row_count == 0) {
+        return {};
+    }
+    const std::size_t hidden_size = key_value_head_count_ * head_dim_;
+    const std::size_t row_bytes = hidden_size * sizeof(float);
+    return {LayerByteOffset(layer_index) + sequence_lengths_[layer_index] * row_bytes, row_count * row_bytes};
 }
 
 std::size_t KVCache::GetLayerCount() const {
@@ -161,9 +325,20 @@ std::size_t KVCache::GetMaxSequenceLength() const {
     return max_sequence_length_;
 }
 
-std::size_t KVCache::LayerByteOffset(std::size_t layer_index) const {
+std::size_t KVCache::GetLayerSpanBytes() const {
     const std::size_t hidden_size = key_value_head_count_ * head_dim_;
-    return layer_index * max_sequence_length_ * hidden_size * sizeof(float);
+    return max_sequence_length_ * hidden_size * sizeof(float);
+}
+
+std::size_t KVCache::GetSequenceLengthForLayer(std::size_t layer_index) const {
+    if (layer_index >= layer_count_) {
+        return 0;
+    }
+    return sequence_lengths_[layer_index];
+}
+
+std::size_t KVCache::LayerByteOffset(std::size_t layer_index) const {
+    return layer_index * GetLayerSpanBytes();
 }
 
 bool KVCache::CopyIntoLayer(const MetalContext& context,

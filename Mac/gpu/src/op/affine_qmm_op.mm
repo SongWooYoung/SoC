@@ -200,12 +200,12 @@ bool AffineQmmOp::Run(const MetalContext& context,
         !use_downproj_specialized;
     const bool use_lmhead_specialized =
         params.row_count == 1 && UseExperimentalQ4LmheadSpecialized() && IsLmheadDecodeProfile(params.profile_label);
-    key.function_name = use_downproj_specialized ? "affine_qmm_t_4bit_lmhead2"
-                                            : (use_mlp_specialized ? "affine_qmm_t_4bit_mlp2"
-                                            : ((use_lmhead_specialized || use_downproj_specialized)
-                                                   ? "affine_qmm_t_4bit_lmhead2"
-                                                   : "affine_qmm_t_4bit"));
-    key.threadgroup_width = use_mlp_specialized ? 16 : 32;
+            key.function_name = use_downproj_specialized ? "affine_qmm_t_4bit_lmhead2"
+                                  : (use_mlp_specialized ? "affine_qmm_t_4bit_mlp2"
+                                  : ((use_lmhead_specialized || use_downproj_specialized)
+                                      ? "affine_qmm_t_4bit_lmhead2"
+                                      : "affine_qmm_t_4bit"));
+            key.threadgroup_width = use_mlp_specialized ? 16 : 32;
     key.threadgroup_height = 1;
     const void* pipeline_handle = pipeline_cache->GetOrCreatePipeline(key, error_message);
     if (pipeline_handle == nullptr) {

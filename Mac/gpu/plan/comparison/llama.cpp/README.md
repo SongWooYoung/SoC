@@ -159,3 +159,40 @@ graph까지 안 가더라도 최소한 `DeviceTensor buffer + offset + size` 기
 `llama.cpp`와 비교하면, 지금 우리 쪽 성능 한계는 단순히 Metal kernel 품질만의 문제가 아니다. scheduler 부재, hazard-aware batching 부재, 너무 많은 per-op finalize가 같이 묶여 있다. 반대로 giant batching이 fault를 냈으므로, 다음 방향은 "graph-aware 또는 최소한 hazard-aware bounded batching"이다.
 
 즉 `llama.cpp`에서 배워야 할 핵심은 "많이 묶는다"가 아니라 "안전하다고 증명된 범위만 묶는다"이다.
+
+## 2026-04-01 GitHub 재검토: prefill / decode 최적화
+
+이번에는 기존 로컬 스냅샷 요약이 아니라 GitHub 메인라인 구현을 다시 확인했다. 핵심 파일은 다음과 같다.
+
+- `src/llama-context.cpp`
+- `src/llama-kv-cache.cpp`
+- `ggml/src/ggml-metal/ggml-metal-context.m`
+- `ggml/src/ggml-metal/ggml-metal-ops.cpp`
+- `ggml/src/ggml-metal/ggml-metal-common.cpp`
+
+### prefill에서 실제로 하는 일
+
+1. prefill은 "긴 prompt를 즉시 eager op 체인으로 민다"가 아니라, `graph_reserve()`, `sched_reserve()`, `process_ubatch()`를 통해 먼저 그래프와 메모리 배치를 예약한 뒤 실행한다.
+2. `llama_context::decode()`는 내부적으로 `n_ubatch` 기준으로 입력을 잘라 여러 `ubatch`로 처리할 수 있게 되어 있어, 긴 prompt prefill은 자연스럽게 `ubatch` 단위로 분할된다.
+3. Metal backend는 `GGML_METAL_MAX_COMMAND_BUFFERS 8` 아래에서 그래프 node range를 나눠 encode한다. 즉 prefill 최적화의 핵심은 giant batch가 아니라 graph split이다.
+4. `ggml_graph_optimize()`는 `ADD`, `NORM`, `RMS_NORM` 같은 제한된 op만 fuse 대상으로 본다. prefill에서도 무차별 fusion이 아니라 graph reordering + 제한적 fusion만 허용한다.
+5. 일부 op는 prefill shape를 따로 본다. 예를 들어 Metal `ssm_conv` 경로는 `ne1 > 1`일 때 batched kernel을 선택해 threadgroup dispatch 수를 줄인다.
+
+### decode에서 실제로 하는 일
+
+1. decode는 `past_key_values`를 단순 append만 하지 않고, `llama_kv_cache::prepare()`, `update()`, `init_batch()`로 slot과 메모리 배치를 먼저 정리한다.
+2. Metal encode 단계는 `ggml_metal_op_concurrency_check/add/reset`으로 tensor buffer id와 mem range를 추적하면서 같은 encoder 안에 둘 수 있는 op만 묶는다.
+3. op fusion도 `ggml_can_fuse_ext`와 concurrency check를 통과한 범위에서만 일어난다. 즉 decode 최적화는 hazard-aware batching이다.
+4. `FLASH_ATTN_EXT`, `ROPE`, `SOFT_MAX`, `TOP_K`까지 graph op로 들어가므로, decode hot path가 runtime 호출 순서가 아니라 graph encode 정책의 영향을 직접 받는다.
+5. decode 캐시는 단순 KV만이 아니라 linear attention류 상태까지 cache layer로 다뤄서, `seq_len == 1` fast path가 모델 구현 전체에 걸쳐 일관되게 적용된다.
+
+### 지금 우리에게 바로 적용할 점
+
+1. `CommandStream`을 더 넓히는 대신, `DeviceTensor buffer + offset + size` 기반 real hazard tracker를 먼저 넣는다.
+2. prefill도 full prompt 일괄 실행이 아니라 `ubatch` 또는 `prefill_step_size` 성격의 분할 실행 계획을 넣는다.
+3. `DecodeAttnPrepBatch`, `DecodeAttentionOutputBatch`, `DecodePostNormMlpBatch`를 다음 단계에서 `decode stage plan`으로 승격할 때, whitelist가 아니라 실제 read/write range 기반으로 묶음 적법성을 계산해야 한다.
+4. `RMSNorm`/`Add`류만이라도 제한적 fuse 후보를 따로 두고, `matmul`과는 분리해서 판단한다.
+
+### 이번 재검토의 결론
+
+`llama.cpp`의 prefill/decode 최적화는 "kernel 하나가 압도적으로 좋아서"가 아니라, graph reserve, ubatch, hazard-aware command-buffer split, 제한적 fusion이 서로 맞물려 나온다. 우리 쪽에서 바로 가져와야 하는 1순위는 새 giant batch가 아니라 `real range hazard tracker + decode plan + chunked prefill`이다.

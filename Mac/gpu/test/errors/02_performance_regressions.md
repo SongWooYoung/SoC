@@ -387,3 +387,169 @@
 - `Mac/gpu/shaders/gpu_kernels.metal`
 - `Mac/gpu/build/reports/quick/q4_blockattn_logitbatch_qmmmlp_qmmattn2_8tok.json`
 - `Mac/gpu/build/reports/decode_hang_check_q4_blockattn_logitbatch_qmmmlp_qmmattn2.json`
+
+## 13. Softmax SIMD Cooperative Reduction
+
+상태: `tested and reverted`
+
+관찰:
+
+1. `softmax_f32_rowwise`를 32-lane cooperative reduction kernel로 바꿔 `Softmax gpu_ms` 자체는 baseline `~22.83 ms`에서 `~7.95 ms`까지 줄었다.
+2. kernel test와 real-bundle regression은 통과했고, 출력 correctness 문제도 없었다.
+3. 하지만 `benchmark_full_gpu_vs_pytorch` 32-token 기준 3-run 평균은 full GPU throughput이 `~6.116 tok/s` baseline 대비 `~6.145 tok/s` 수준으로 사실상 동일했다.
+4. 같은 측정에서 total `gpu_ms`는 `~1605 -> ~1694 ms`로 오히려 늘었고, `wait_ms`와 `command_buffer_count`도 구조적으로 그대로였다.
+
+원인 가설:
+
+1. 현재 엔진의 지배 병목은 softmax 단일 커널보다 decode projection과 per-op submit/wait overhead다.
+2. softmax를 빠르게 만들어도 `17120` command buffer 구조와 decode matmul 비용이 그대로라 end-to-end wall 개선으로 거의 이어지지 않았다.
+3. 즉 이 실험은 "kernel hotspot 개선"과 "실제 throughput 개선"이 다를 수 있다는 점을 다시 확인한 사례다.
+
+교훈:
+
+1. 앞으로 softmax 계열 작업은 standalone kernel speedup만으로 채택하지 않는다.
+2. 다음 attention 최적화는 softmax 단독 교체보다 `AttentionScore -> Softmax -> AttentionValue`의 bounded submit reduction 또는 더 큰 attention-scope 재구성이 우선이다.
+3. per-op GPU ms가 크게 좋아져도 total tok/s가 유의미하게 오르지 않으면 기본 경로에 넣지 않는다.
+
+관련 파일:
+
+- `Mac/gpu/src/op/softmax_op.mm`
+- `Mac/gpu/shaders/gpu_kernels.metal`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_softmax_simd.md`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_softmax_simd_3runs.md`
+
+## 14. Decode Final Logits Batch On Top Of Attention Output Batching
+
+상태: `tested and kept experimental only`
+
+관찰:
+
+1. `SOC_GPU_ENABLE_EXPERIMENTAL_DECODE_FINAL_LOGITS_BATCH=1`를 현재 attention output batching 경로 위에 추가로 켰다.
+2. command buffer 수는 `14516 -> 14485`로 소폭 줄었지만, 1-run 비교에서 full GPU throughput은 `~6.753 tok/s`에서 `~6.497 tok/s`로 오히려 내려갔다.
+3. `DecodeFinalNormLmHeadBatch` 자체는 정상 동작했고 correctness 문제도 없었지만, total `gpu_ms`와 `wait_ms`는 개선되지 않았다.
+
+원인 가설:
+
+1. final RMSNorm + LMHead는 이미 command buffer 수가 적어서, submit 수를 조금 더 줄여도 전체 wall에 미치는 영향이 작다.
+2. 반대로 LMHead stage의 큰 compute cost가 그대로라, 추가 batching 이득보다 queue ordering 변화가 더 크게 작용했을 가능성이 높다.
+3. 현재 엔진에서는 final logits batching보다 attention output batching 쪽이 더 우선순위가 높다.
+
+교훈:
+
+1. remaining bounded batching work는 token 마지막 stage보다 decode 중반의 반복 hot path를 먼저 다뤄야 한다.
+2. `SOC_GPU_ENABLE_EXPERIMENTAL_DECODE_FINAL_LOGITS_BATCH`는 유지하되, 기본 경로로 승격하지 않는다.
+
+관련 파일:
+
+- `Mac/gpu/src/model/qwen_causal_lm.cpp`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_attn_output_batch.md`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_attn_output_logitbatch.md`
+
+## 15. Dense `LMHeadDecode` 4-Column Kernel On Top Of Current Bounded Decode Path
+
+상태: `retested and kept experimental only`
+
+관찰:
+
+1. 이미 기본 경로에 올라간 `DecodeAttnPrepBatch`, `KVCacheBlitBatch`, `DecodeAttentionOutputBatch`, `DecodePostNormMlpBatch` 위에 `SOC_GPU_ENABLE_EXPERIMENTAL_LMHEAD_4COL=1`를 다시 올려 봤다.
+2. 같은 시점 immediate 3-run baseline 비교에서 기본 경로는 `~13.389 tok/s`, `LMHead 4-col`은 `~13.074 tok/s`였다.
+3. profiling상 `LMHeadDecode`도 `~218.7 ms -> ~420.5 ms`로 명확히 악화됐다.
+
+원인 가설:
+
+1. submit overhead가 크게 줄어든 현재 경로에서도, `LMHeadDecode`의 register pressure와 load pattern 손실이 여전히 더 크다.
+2. 단일 stage 개선이 아니라 전체가 좋아 보였던 이전 1-run은 노이즈였다.
+
+현재 정책:
+
+1. 기본 경로에서는 사용하지 않는다.
+2. `SOC_GPU_ENABLE_EXPERIMENTAL_LMHEAD_4COL=1`는 계속 실험 전용으로만 둔다.
+
+관련 파일:
+
+- `Mac/gpu/src/op/matmul_op.mm`
+- `Mac/gpu/shaders/gpu_kernels.metal`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_lmhead4col_current_3runs.md`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_kvbatch_attnprep_postnorm_3runs_rerun.md`
+
+## 16. Q4 `DownProjDecode` Specialized Kernel On Top Of Current Bounded Decode Path
+
+상태: `rejected`
+
+관찰:
+
+1. `SOC_GPU_ENABLE_EXPERIMENTAL_Q4_DOWNPROJ_SPECIALIZED=1`를 현재 bounded q4 decode 경로 위에 다시 올렸다.
+2. benchmark wrapper가 결과 JSON을 UTF-8로 읽지 못하고 실패했다.
+3. 남은 산출물의 `generated_text`도 이미 깨져 있어서, 단순 성능 회귀가 아니라 출력 무결성 자체가 깨졌다.
+
+원인 가설:
+
+1. 현재 `affine_qmm_t_4bit_lmhead2`를 downproj에도 재사용하는 specialization이 decode output을 손상시키는 것으로 보인다.
+2. 현재 bounded decode scheduling과 결합했을 때도 correctness 문제가 남아 있으므로, 성능 논의 이전에 배제해야 한다.
+
+현재 정책:
+
+1. 기본 경로에서는 절대 사용하지 않는다.
+2. downproj 전용 q4 specialization은 별도 correctness 수정 전까지 다시 평가하지 않는다.
+
+관련 파일:
+
+- `Mac/gpu/src/op/affine_qmm_op.mm`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_current_qmmdown/gpu_full_run_1.json`
+
+## 17. Dense `DownProjDecode` Width-16 Override On Current Bounded Decode Path
+
+상태: `rejected`
+
+관찰:
+
+1. 현재 dense 기본 경로 위에서 `SOC_GPU_ENABLE_EXPERIMENTAL_DOWNPROJ_WIDTH16=1`로 `DownProjDecode`만 `preferred_threadgroup_width=16`, `preferred_tile_columns=16`으로 좁혔다.
+2. `make build-infer`와 `REAL_BUNDLE_MAX_NEW_TOKENS=8 make integration-real-bundle`는 통과했다.
+3. 하지만 32-token full benchmark 1-run에서 immediate dense baseline은 `~13.389 tok/s`였고, 이 override를 켜면 `~12.090 tok/s`로 내려갔다.
+4. 같은 측정에서 `DecodePostNormMlpBatch gpu_ms`도 `~483.57 ms -> ~613.00 ms`로 악화됐다.
+
+원인 가설:
+
+1. `bench_matmul`의 개별 shape 힌트와 실제 decode graph의 최적점이 달랐다.
+2. `DownProjDecode`만 폭을 줄여도 threadgroup scheduling 이득보다 전체 MLP batch 내부의 locality 손실이 더 컸다.
+3. 즉 현재 bounded dense path에서는 `DownProjDecode` width를 따로 좁히는 방향이 end-to-end로는 맞지 않았다.
+
+현재 정책:
+
+1. 기본 경로에서는 사용하지 않는다.
+2. 해당 override 코드는 제거했다.
+
+관련 파일:
+
+- `Mac/gpu/src/module/qwen_mlp.mm`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_dense_detail_current.md`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_downproj16_current.md`
+
+## 18. Q4 Decode `Q/K/V`-Only Specialization On Current Bounded Decode Path
+
+상태: `rejected`
+
+관찰:
+
+1. `QProjDecodeQ4`, `KProjDecodeQ4`, `VProjDecodeQ4`만 기존 `affine_qmm_t_4bit_mlp2` `16x2` kernel로 우회하는 좁은 variant를 `SOC_GPU_ENABLE_EXPERIMENTAL_Q4_QKV_SPECIALIZED=1`로 시도했다.
+2. `8-token` hang smoke는 통과했고, output도 즉시 깨지지는 않았다.
+3. 하지만 현재 q4 baseline 32-token 1-run은 `~19.879 tok/s`였고, 같은 조건에서 variant는 `~15.236 tok/s`로 크게 악화됐다.
+4. 같은 측정에서 `DecodeAttnPrepBatch gpu_ms`도 `~103.22 ms -> ~199.67 ms`로 거의 두 배 수준으로 증가했다.
+
+원인 가설:
+
+1. 현재 q4 bounded decode graph에서 `Q/K/V` projection은 `16x2` reuse kernel보다 기존 generic q4 kernel이 더 잘 맞는다.
+2. `OProj`를 제외해도, attention prep batch 안에서 Q/K/V projection 세 개를 모두 이 kernel로 바꾸면 register pressure와 memory behavior가 오히려 나빠진다.
+3. 과거 기록대로 attention q4 specialization은 quick smoke나 부분 단계가 아니라 full decode benchmark 기준으로만 판단해야 한다.
+
+현재 정책:
+
+1. 기본 경로에서는 사용하지 않는다.
+2. 해당 variant 코드는 제거했다.
+
+관련 파일:
+
+- `Mac/gpu/src/op/affine_qmm_op.mm`
+- `Mac/gpu/build/reports/decode_hang_check_q4_current_qkvspecialized.json`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_current_qkvspecialized_baseline.md`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_current_qkvspecialized.md`

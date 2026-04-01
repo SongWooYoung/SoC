@@ -38,6 +38,13 @@ struct QwenCausalLMParams {
     float rms_norm_eps = 1.0e-6f;
 };
 
+enum class RangeCommandStreamMode {
+    kDefault,
+    kOff,
+    kLayer,
+    kFullRange,
+};
+
 class QwenCausalLM {
 public:
     QwenCausalLM(QwenCausalLMWeights weights, QwenCausalLMParams params);
@@ -65,6 +72,7 @@ public:
                            std::size_t start_layer,
                            std::size_t end_layer,
                            bool apply_final_norm,
+                           RangeCommandStreamMode command_stream_mode,
                            std::string* error_message) const;
 
     bool ForwardHiddenFromStatesRange(const MetalContext& context,
@@ -76,6 +84,7 @@ public:
                                       std::size_t start_layer,
                                       std::size_t end_layer,
                                       bool apply_final_norm,
+                                      RangeCommandStreamMode command_stream_mode,
                                       std::string* error_message) const;
 
     bool ForwardHiddenCached(const MetalContext& context,
@@ -97,6 +106,7 @@ public:
                                   std::size_t start_layer,
                                   std::size_t end_layer,
                                   bool apply_final_norm,
+                                  RangeCommandStreamMode command_stream_mode,
                                   std::string* error_message) const;
 
     bool ForwardHiddenFromStatesCachedRange(const MetalContext& context,
@@ -109,6 +119,7 @@ public:
                                             std::size_t start_layer,
                                             std::size_t end_layer,
                                             bool apply_final_norm,
+                                            RangeCommandStreamMode command_stream_mode,
                                             std::string* error_message) const;
 
     bool ForwardLogits(const MetalContext& context,

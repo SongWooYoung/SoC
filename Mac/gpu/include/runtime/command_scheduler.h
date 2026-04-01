@@ -13,6 +13,21 @@ namespace soc::gpu {
 class BufferArena;
 class MetalContext;
 
+enum class DecodePlanBufferKind {
+    kHiddenSlot0,
+    kHiddenSlot1,
+    kLogits,
+    kKvKeys,
+    kKvValues,
+};
+
+struct DecodePlanAccessRange {
+    DecodePlanBufferKind buffer_kind = DecodePlanBufferKind::kHiddenSlot0;
+    std::size_t byte_offset = 0;
+    std::size_t byte_size = 0;
+    bool write = false;
+};
+
 struct DecodePlanStage {
     enum class Kind {
         kEmbedAndFirstLayer,
@@ -28,12 +43,14 @@ struct DecodePlanStage {
     std::size_t output_slot = 0;
     std::size_t batch_id = 0;
     const char* label = nullptr;
+    std::vector<DecodePlanAccessRange> accesses;
 };
 
 struct DecodeExecutionPlan {
     std::size_t layer_count = 0;
     std::size_t hidden_size = 0;
     std::size_t vocab_size = 0;
+    std::size_t max_sequence_length = 0;
     bool q4_decode_enabled = false;
     bool safe_decode_batch_enabled = false;
     std::vector<DecodePlanStage> stages;
@@ -79,7 +96,7 @@ private:
                            BufferArena* temporary_arena,
                            std::size_t position_offset,
                            std::string* error_message) const;
-    bool EnsureDecodePlan(const QwenCausalLM& model) const;
+    bool EnsureDecodePlan(const QwenCausalLM& model, const KVCache& kv_cache) const;
     bool EnsureHiddenBuffer(const MetalContext& context,
                             std::size_t slot,
                             std::size_t hidden_size,

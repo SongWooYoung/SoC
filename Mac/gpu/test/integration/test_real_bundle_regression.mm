@@ -120,6 +120,18 @@ std::filesystem::path ResolveReportPath() {
     return "build/reports/test_real_bundle_regression_report.md";
 }
 
+std::filesystem::path BuildPromptCacheArtifactPath(const std::string& case_name,
+                                                  const std::vector<int>& prompt_token_ids) {
+    std::ostringstream stream;
+    stream << case_name << ':';
+    for (int token_id : prompt_token_ids) {
+        stream << token_id << ',';
+    }
+    const std::size_t artifact_hash = std::hash<std::string>{}(stream.str());
+    return std::filesystem::temp_directory_path() /
+           ("soc_gpu_prompt_cache_" + std::to_string(artifact_hash) + ".bin");
+}
+
 void LogProgress(const std::string& message) {
     std::cout << "[test_real_bundle_regression] " << message << std::endl;
 }
@@ -569,6 +581,107 @@ bool RunGpuGenerationContext(const TokenizerRuntime& tokenizer,
     return true;
 }
 
+bool RunGpuGenerationContextFromPromptCacheArtifact(const TokenizerRuntime& tokenizer,
+                                                    const RuntimeGenerationOptions& options,
+                                                    const std::vector<int>& prompt_token_ids,
+                                                    const std::string& case_name,
+                                                    const soc::gpu::MetalContext& context,
+                                                    soc::gpu::PipelineCache* pipeline_cache,
+                                                    const soc::gpu::QwenCausalLM& model,
+                                                    const soc::gpu::Sampler& sampler,
+                                                    const soc::gpu::CommandScheduler& scheduler,
+                                                    soc::gpu::BufferArena* temporary_arena,
+                                                    std::uint64_t recommended_working_set_size,
+                                                    GenerationRun* run,
+                                                    std::string* error_message) {
+    if (run == nullptr) {
+        if (error_message != nullptr) {
+            *error_message = "RunGpuGenerationContextFromPromptCacheArtifact requires a non-null run output";
+        }
+        return false;
+    }
+
+    run->prompt_token_ids = prompt_token_ids;
+    run->generated_token_ids.clear();
+    run->generated_text.clear();
+    run->first_top_token_ids.clear();
+    run->first_top_logits.clear();
+    run->prefill_timing = {};
+    run->decode_timing = {};
+    run->total_timing = {};
+    run->peak_temp_bytes = 0;
+    run->working_set_ratio = 0.0;
+
+    const std::filesystem::path artifact_path = BuildPromptCacheArtifactPath(case_name, prompt_token_ids);
+    std::error_code remove_error;
+    std::filesystem::remove(artifact_path, remove_error);
+
+    {
+        soc::gpu::GenerationContext artifact_writer(model,
+                                                    sampler,
+                                                    scheduler,
+                                                    ResolveSequenceCapacity(options, prompt_token_ids.size()));
+        temporary_arena->Reset();
+        temporary_arena->ClearTelemetry();
+        if (!artifact_writer.Prefill(context,
+                                     pipeline_cache,
+                                     prompt_token_ids,
+                                     temporary_arena,
+                                     error_message) ||
+            !artifact_writer.SavePromptCacheArtifact(context, artifact_path.string(), error_message)) {
+            std::filesystem::remove(artifact_path, remove_error);
+            return false;
+        }
+    }
+
+    soc::gpu::GenerationContext cached_generation_context(model,
+                                                          sampler,
+                                                          scheduler,
+                                                          ResolveSequenceCapacity(options, prompt_token_ids.size()));
+    const Clock::time_point total_wall_start = Clock::now();
+    const double total_cpu_start_ms = ReadProcessCpuMilliseconds();
+
+    temporary_arena->Reset();
+    temporary_arena->ClearTelemetry();
+    context.ResetProfiling();
+    const Clock::time_point prefill_wall_start = Clock::now();
+    const double prefill_cpu_start_ms = ReadProcessCpuMilliseconds();
+    if (!cached_generation_context.LoadPromptCacheArtifact(context, artifact_path.string(), error_message)) {
+        std::filesystem::remove(artifact_path, remove_error);
+        return false;
+    }
+    const soc::gpu::MetalProfilingSnapshot prefill_profile = context.GetProfilingSnapshot();
+    run->prefill_timing = FinishTiming(prefill_wall_start, prefill_cpu_start_ms, prefill_profile.gpu_ms);
+
+    context.ResetProfiling();
+    const Clock::time_point decode_wall_start = Clock::now();
+    const double decode_cpu_start_ms = ReadProcessCpuMilliseconds();
+    if (!cached_generation_context.GenerateFromLoadedPromptCache(context,
+                                                                 pipeline_cache,
+                                                                 options.max_new_tokens,
+                                                                 options.eos_token_id,
+                                                                 temporary_arena,
+                                                                 &run->generated_token_ids,
+                                                                 error_message)) {
+        std::filesystem::remove(artifact_path, remove_error);
+        return false;
+    }
+    const soc::gpu::MetalProfilingSnapshot decode_profile = context.GetProfilingSnapshot();
+    run->decode_timing = FinishTiming(decode_wall_start, decode_cpu_start_ms, decode_profile.gpu_ms);
+    run->total_timing = FinishTiming(total_wall_start,
+                                     total_cpu_start_ms,
+                                     run->prefill_timing.gpu_ms + run->decode_timing.gpu_ms);
+    run->generated_text = tokenizer.Decode(run->generated_token_ids);
+    run->first_token_id = run->generated_token_ids.empty() ? -1 : run->generated_token_ids.front();
+    run->peak_temp_bytes = temporary_arena->GetPeakUsedBytes();
+    if (recommended_working_set_size > 0) {
+        run->working_set_ratio = static_cast<double>(run->peak_temp_bytes) /
+                                 static_cast<double>(recommended_working_set_size);
+    }
+    std::filesystem::remove(artifact_path, remove_error);
+    return true;
+}
+
 std::string JoinTokenIds(const std::vector<int>& token_ids) {
     std::ostringstream stream;
     for (std::size_t index = 0; index < token_ids.size(); ++index) {
@@ -595,6 +708,7 @@ void AppendCaseReport(std::ostringstream* report,
                       const GenerationRun& cpu_run,
                       const GenerationRun& gpu_manual_run,
                       const GenerationRun& gpu_context_run,
+                      const GenerationRun& gpu_cached_run,
                       float max_abs_logit_diff,
                       const soc::gpu::MetalDeviceInfo& device_info) {
     *report << "## " << regression_case.name << "\n\n";
@@ -607,46 +721,59 @@ void AppendCaseReport(std::ostringstream* report,
     *report << "- CPU text: " << cpu_run.generated_text << "\n";
     *report << "- GPU text: " << gpu_context_run.generated_text << "\n\n";
 
-    *report << "| Metric | CPU | GPU manual | GPU context |\n";
-    *report << "| --- | ---: | ---: | ---: |\n";
+    *report << "| Metric | CPU | GPU manual | GPU context | GPU cached |\n";
+    *report << "| --- | ---: | ---: | ---: | ---: |\n";
     *report << "| Total wall ms | " << FormatDouble(cpu_run.total_timing.wall_ms)
             << " | " << FormatDouble(gpu_manual_run.total_timing.wall_ms)
-            << " | " << FormatDouble(gpu_context_run.total_timing.wall_ms) << " |\n";
+            << " | " << FormatDouble(gpu_context_run.total_timing.wall_ms)
+            << " | " << FormatDouble(gpu_cached_run.total_timing.wall_ms) << " |\n";
     *report << "| Total CPU ms | " << FormatDouble(cpu_run.total_timing.cpu_ms)
             << " | " << FormatDouble(gpu_manual_run.total_timing.cpu_ms)
-            << " | " << FormatDouble(gpu_context_run.total_timing.cpu_ms) << " |\n";
+            << " | " << FormatDouble(gpu_context_run.total_timing.cpu_ms)
+            << " | " << FormatDouble(gpu_cached_run.total_timing.cpu_ms) << " |\n";
         *report << "| Total GPU ms | n/a"
             << " | " << FormatDouble(gpu_manual_run.total_timing.gpu_ms)
-            << " | " << FormatDouble(gpu_context_run.total_timing.gpu_ms) << " |\n";
+            << " | " << FormatDouble(gpu_context_run.total_timing.gpu_ms)
+            << " | " << FormatDouble(gpu_cached_run.total_timing.gpu_ms) << " |\n";
     *report << "| CPU active ratio | " << FormatDouble(cpu_run.total_timing.cpu_active_ratio)
             << " | " << FormatDouble(gpu_manual_run.total_timing.cpu_active_ratio)
-            << " | " << FormatDouble(gpu_context_run.total_timing.cpu_active_ratio) << " |\n";
+            << " | " << FormatDouble(gpu_context_run.total_timing.cpu_active_ratio)
+            << " | " << FormatDouble(gpu_cached_run.total_timing.cpu_active_ratio) << " |\n";
         *report << "| GPU active ratio | n/a"
             << " | " << FormatDouble(gpu_manual_run.total_timing.gpu_active_ratio, 6)
-            << " | " << FormatDouble(gpu_context_run.total_timing.gpu_active_ratio, 6) << " |\n";
+            << " | " << FormatDouble(gpu_context_run.total_timing.gpu_active_ratio, 6)
+            << " | " << FormatDouble(gpu_cached_run.total_timing.gpu_active_ratio, 6) << " |\n";
     *report << "| Prefill wall ms | " << FormatDouble(cpu_run.prefill_timing.wall_ms)
             << " | " << FormatDouble(gpu_manual_run.prefill_timing.wall_ms)
-            << " | n/a |\n";
+            << " | n/a"
+            << " | " << FormatDouble(gpu_cached_run.prefill_timing.wall_ms) << " |\n";
     *report << "| Decode wall ms | " << FormatDouble(cpu_run.decode_timing.wall_ms)
             << " | " << FormatDouble(gpu_manual_run.decode_timing.wall_ms)
-            << " | n/a |\n";
+            << " | n/a"
+            << " | " << FormatDouble(gpu_cached_run.decode_timing.wall_ms) << " |\n";
         *report << "| Prefill GPU ms | n/a"
             << " | " << FormatDouble(gpu_manual_run.prefill_timing.gpu_ms)
-            << " | n/a |\n";
+            << " | n/a"
+            << " | " << FormatDouble(gpu_cached_run.prefill_timing.gpu_ms) << " |\n";
         *report << "| Decode GPU ms | n/a"
             << " | " << FormatDouble(gpu_manual_run.decode_timing.gpu_ms)
-            << " | n/a |\n";
+            << " | n/a"
+            << " | " << FormatDouble(gpu_cached_run.decode_timing.gpu_ms) << " |\n";
         *report << "| Prefill ms / prompt token | "
             << FormatDouble(SafeDivide(cpu_run.prefill_timing.wall_ms, static_cast<double>(cpu_run.prompt_token_ids.size())), 6)
             << " | "
             << FormatDouble(SafeDivide(gpu_manual_run.prefill_timing.wall_ms, static_cast<double>(gpu_manual_run.prompt_token_ids.size())), 6)
-            << " | n/a |\n";
+            << " | n/a"
+            << " | " << FormatDouble(SafeDivide(gpu_cached_run.prefill_timing.wall_ms, static_cast<double>(std::max<std::size_t>(gpu_cached_run.prompt_token_ids.size(), 1))), 6)
+            << " |\n";
         *report << "| Decode ms / generated token | "
             << FormatDouble(SafeDivide(cpu_run.decode_timing.wall_ms, static_cast<double>(std::max<std::size_t>(cpu_run.generated_token_ids.size(), 1))), 6)
             << " | "
             << FormatDouble(SafeDivide(gpu_manual_run.decode_timing.wall_ms, static_cast<double>(std::max<std::size_t>(gpu_manual_run.generated_token_ids.size(), 1))), 6)
             << " | "
             << FormatDouble(SafeDivide(gpu_context_run.total_timing.wall_ms, static_cast<double>(std::max<std::size_t>(gpu_context_run.generated_token_ids.size(), 1))), 6)
+            << " | "
+            << FormatDouble(SafeDivide(gpu_cached_run.decode_timing.wall_ms, static_cast<double>(std::max<std::size_t>(gpu_cached_run.generated_token_ids.size(), 1))), 6)
             << " |\n";
         *report << "| Tokens / sec | "
             << FormatDouble(SafeDivide(static_cast<double>(cpu_run.generated_token_ids.size()) * 1000.0, cpu_run.total_timing.wall_ms), 6)
@@ -654,11 +781,15 @@ void AppendCaseReport(std::ostringstream* report,
             << FormatDouble(SafeDivide(static_cast<double>(gpu_manual_run.generated_token_ids.size()) * 1000.0, gpu_manual_run.total_timing.wall_ms), 6)
             << " | "
             << FormatDouble(SafeDivide(static_cast<double>(gpu_context_run.generated_token_ids.size()) * 1000.0, gpu_context_run.total_timing.wall_ms), 6)
+            << " | "
+            << FormatDouble(SafeDivide(static_cast<double>(gpu_cached_run.generated_token_ids.size()) * 1000.0, gpu_cached_run.total_timing.wall_ms), 6)
             << " |\n";
     *report << "| Temp peak bytes | n/a | " << gpu_manual_run.peak_temp_bytes
-            << " | " << gpu_context_run.peak_temp_bytes << " |\n";
+            << " | " << gpu_context_run.peak_temp_bytes
+            << " | " << gpu_cached_run.peak_temp_bytes << " |\n";
     *report << "| Temp working-set ratio | n/a | " << FormatDouble(gpu_manual_run.working_set_ratio, 6)
-            << " | " << FormatDouble(gpu_context_run.working_set_ratio, 6) << " |\n\n";
+            << " | " << FormatDouble(gpu_context_run.working_set_ratio, 6)
+            << " | " << FormatDouble(gpu_cached_run.working_set_ratio, 6) << " |\n\n";
 
     *report << "- CPU:GPU context wall ratio = "
             << FormatDouble(cpu_run.total_timing.wall_ms / std::max(gpu_context_run.total_timing.wall_ms, 1.0e-9)) << "\n";
@@ -672,6 +803,10 @@ void AppendCaseReport(std::ostringstream* report,
             << FormatDouble(SafeDivide(gpu_manual_run.decode_timing.wall_ms, gpu_manual_run.total_timing.wall_ms), 6) << "\n";
         *report << "- GPU context command-buffer busy share of total wall = "
             << FormatDouble(gpu_context_run.total_timing.gpu_active_ratio, 6) << "\n";
+        *report << "- GPU cached prefill(load) share of total wall = "
+            << FormatDouble(SafeDivide(gpu_cached_run.prefill_timing.wall_ms, gpu_cached_run.total_timing.wall_ms), 6) << "\n";
+        *report << "- GPU cached decode share of total wall = "
+            << FormatDouble(SafeDivide(gpu_cached_run.decode_timing.wall_ms, gpu_cached_run.total_timing.wall_ms), 6) << "\n";
         *report << "- GPU memory pressure proxy uses temporary arena peak / recommended working set ("
             << device_info.recommended_max_working_set_size << " bytes).\n\n";
 }
@@ -705,6 +840,7 @@ bool WriteReport(const std::filesystem::path& report_path,
     output << "- Thread execution width: " << device_info.thread_execution_width << "\n";
     output << "- Recommended max working set size: " << device_info.recommended_max_working_set_size << "\n";
     output << "- Utilization note: CPU usage is measured as process CPU time / wall time. GPU execution time is measured from Metal command-buffer GPU timestamps and reported as GPU ms and GPU active ratio. Temporary arena working-set ratio remains a separate memory-pressure proxy.\n\n";
+    output << "- Prompt-cache note: `GPU cached` builds the artifact out of band, then reports artifact load/restore as prefill and cached generation as decode.\n\n";
     output << report.str();
     return true;
 }
@@ -855,6 +991,26 @@ int main() {
                 return 1;
             }
 
+            GenerationRun gpu_cached_run;
+            LogProgress("case " + std::to_string(case_index + 1) + "/" + std::to_string(cases.size()) +
+                        ": " + regression_case.name + " - prompt cache artifact GPU generation");
+            if (!RunGpuGenerationContextFromPromptCacheArtifact(tokenizer,
+                                                                options,
+                                                                cpu_run.prompt_token_ids,
+                                                                regression_case.name,
+                                                                *context,
+                                                                &pipeline_cache,
+                                                                gpu_model,
+                                                                gpu_sampler,
+                                                                scheduler,
+                                                                temporary_arena.get(),
+                                                                device_info.recommended_max_working_set_size,
+                                                                &gpu_cached_run,
+                                                                &error_message)) {
+                std::cerr << "Prompt cache artifact GPU generation failed for " << regression_case.name << ": " << error_message << '\n';
+                return 1;
+            }
+
             if (cpu_run.generated_token_ids != gpu_manual_run.generated_token_ids) {
                 std::cerr << "manual GPU sequence mismatch for " << regression_case.name << "\n"
                           << "cpu: [" << JoinTokenIds(cpu_run.generated_token_ids) << "]\n"
@@ -871,12 +1027,17 @@ int main() {
                 std::cerr << "manual/context GPU mismatch for " << regression_case.name << '\n';
                 return 1;
             }
+            if (gpu_manual_run.generated_token_ids != gpu_cached_run.generated_token_ids) {
+                std::cerr << "manual/cached GPU mismatch for " << regression_case.name << '\n';
+                return 1;
+            }
 
             AppendCaseReport(&report,
                              regression_case,
                              cpu_run,
                              gpu_manual_run,
                              gpu_context_run,
+                             gpu_cached_run,
                              max_abs_logit_diff,
                              device_info);
             LogProgress("case " + std::to_string(case_index + 1) + "/" + std::to_string(cases.size()) +

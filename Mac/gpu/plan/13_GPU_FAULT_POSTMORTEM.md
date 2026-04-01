@@ -104,6 +104,43 @@ Mac mini M4 32GB에서 `WindowServer` 오류창과 화면 깨짐을 동반한 GP
 6. 새 scheduler는 `full-range`가 아니라 `bounded`여야 하며, attention + KV blit + 다수 layer를 한 command buffer에 무제한으로 섞지 않는다.
 7. `prebuilt decode plan` 실험은 `layer replay`를 기본값으로 사용하지 않는다. `real buffer-range` tracking은 유지 가능하지만, 실행 scope는 이미 실기기에서 안전성이 확인된 sublayer batch 경계로 제한한다.
 
+2026-04-01 추가 bounded batching 결과:
+
+1. `single-token attention tail` 범위, 즉 `AttentionScore -> Softmax -> AttentionValue`만 한 command buffer로 묶는 경로는 M4에서 안정적으로 동작했다.
+2. 그 범위를 `OProjDecode`까지 확장한 attention output batching도 같은 장비에서 안정적으로 동작했다.
+3. 이 경로들은 `KVCacheBlit`, projection prep matmul, RMSNorm, MLP를 같은 command buffer에 섞지 않는다.
+4. `integration-real-bundle` 8-token regression과 full GPU 32-token benchmark를 통과했고, 동조건 3-run 평균에서 full GPU throughput이 약 `6.136 -> 6.467 tok/s -> 6.573 tok/s`로 단계적으로 개선됐다.
+5. `command_buffer_count`도 `17120 -> 15384 -> 14516`로 감소해, giant batching 없이도 submit overhead를 줄일 수 있음을 확인했다.
+6. 현재 이 경로들은 기본 decode 경로에 반영했고, 문제 분리를 위해 `SOC_GPU_DISABLE_ATTENTION_TAIL_BATCH=1`, `SOC_GPU_DISABLE_ATTENTION_OUTPUT_BATCH=1` opt-out만 남긴다.
+7. 따라서 다음 scheduler 방향은 `layer`나 `full-step` replay가 아니라, 이런 `sublayer-local bounded batching`을 단계적으로 확대하는 것이다.
+
+같은 날 추가 검증된 bounded batching:
+
+1. `post_attention RMSNorm -> MLP(gate/up/mul/down)`만 single-token / single-layer scope에서 묶는 `DecodePostNormMlpBatch`도 안정적으로 동작했다.
+2. 이 경로는 attention 쪽 bounded batching과 분리되어 있으며, `KVCacheBlit`, attention prep/context, final logits를 함께 섞지 않는다.
+3. `integration-real-bundle` 8-token regression을 다시 통과했고, full GPU 32-token 3-run 평균은 기존 attention output batching 기본 경로 `~6.573 tok/s`에서 `~7.767 tok/s`로 추가 개선됐다.
+4. 같은 측정에서 `command_buffer_count`는 `14516 -> 11044`로 더 줄었고, `wait_ms_avg`도 `~4785 -> ~4038` 수준으로 감소했다.
+5. 현재 이 경로도 기본 decode 경로에 반영했고, 필요하면 `SOC_GPU_DISABLE_POSTNORM_MLP_BATCH=1`로만 끈다.
+6. 따라서 현 시점의 안전한 기본 전략은 `full-step batching`이 아니라, `attention tail/output`과 `postnorm+MLP`처럼 의존 범위가 명확한 `decode sublayer-local batching`을 누적하는 것이다.
+
+같은 날 추가로 확인된 bounded batching:
+
+1. `QProj/KProj/VProj -> q/k RMSNorm -> RoPE`만 단일 decode token / 단일 layer scope에서 묶는 `DecodeAttnPrepBatch`도 dense 기본 경로에서 안정적으로 동작했다.
+2. 이 경로는 `KVCacheBlit`, attention score/value, `OProjDecode`, MLP, final logits를 같은 command buffer에 섞지 않는다.
+3. `integration-real-bundle` 8-token regression을 다시 통과했고, full GPU 32-token 3-run 평균은 기존 `postnorm+MLP` 기본 경로 `~7.767 tok/s`에서 `~11.403 tok/s`로 추가 개선됐다.
+4. 같은 측정에서 `command_buffer_count`는 `11044 -> 5836`까지 더 줄었고, `gpu_ms_avg`는 `~1743 -> ~1494`, `wait_ms_avg`는 `~4038 -> ~2748` 수준으로 감소했다.
+5. 현재 이 경로도 기본 decode 경로에 반영했고, 필요하면 `SOC_GPU_DISABLE_ATTENTION_PREP_BATCH=1`로만 끈다.
+6. 현재 dense 기본 decode 전략은 `DecodeAttnPrepBatch`, `DecodeAttentionOutputBatch`, `DecodePostNormMlpBatch`의 세 bounded scope를 누적하는 형태다.
+
+같은 날 추가로 확인된 bounded batching:
+
+1. decode 시 layer별 `key/value` KV cache append를 분리된 두 blit command buffer 대신 하나의 bounded `KVCacheBlitBatch`로 합쳐도 안정적으로 동작했다.
+2. 이 경로도 단일 decode token / 단일 layer scope에서만 동작하며, attention/MLP/final logits과 같은 compute scope와 섞지 않는다.
+3. `integration-real-bundle` 8-token regression을 다시 통과했고, full GPU 32-token 3-run 평균은 기존 `DecodeAttnPrepBatch + DecodeAttentionOutputBatch + DecodePostNormMlpBatch` 기본 경로 `~11.403 tok/s`에서 `~12.068 tok/s`로 추가 개선됐다.
+4. 같은 측정에서 `command_buffer_count`는 `5836 -> 4968`로 더 줄었고, `wait_ms_avg`는 `~2748 -> ~2599` 수준으로 감소했다.
+5. 현재 이 경로도 기본 decode 경로에 반영했고, 필요하면 `SOC_GPU_DISABLE_KV_CACHE_BATCH=1`로만 끈다.
+6. 즉 현재 dense 기본 decode 경로는 `DecodeAttnPrepBatch`, `KVCacheBlitBatch`, `DecodeAttentionOutputBatch`, `DecodePostNormMlpBatch`의 네 bounded scope를 누적하는 전략이다.
+
 ## References
 
 - Apple Metal Best Practices Guide: <https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/index.html>

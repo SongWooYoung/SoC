@@ -19,7 +19,17 @@ enum class CommandStreamMode {
     kFullRange,
 };
 
-CommandStreamMode ResolveCommandStreamMode() {
+CommandStreamMode ResolveCommandStreamMode(const RangeCommandStreamMode override_mode) {
+    switch (override_mode) {
+        case RangeCommandStreamMode::kOff:
+            return CommandStreamMode::kOff;
+        case RangeCommandStreamMode::kLayer:
+            return CommandStreamMode::kLayer;
+        case RangeCommandStreamMode::kFullRange:
+            return CommandStreamMode::kFullRange;
+        case RangeCommandStreamMode::kDefault:
+            break;
+    }
     const char* stream_env = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_COMMAND_STREAM");
     if (stream_env == nullptr) {
         return CommandStreamMode::kOff;
@@ -204,8 +214,9 @@ bool RunBlockRange(const MetalContext& context,
                    std::size_t start_layer,
                    std::size_t end_layer,
                    bool apply_final_norm,
+                   RangeCommandStreamMode override_command_stream_mode,
                    std::string* error_message) {
-    const CommandStreamMode command_stream_mode = ResolveCommandStreamMode();
+    const CommandStreamMode command_stream_mode = ResolveCommandStreamMode(override_command_stream_mode);
     if (!ValidateLayerRange(start_layer, end_layer, weights.blocks.size(), error_message)) {
         return false;
     }
@@ -392,6 +403,7 @@ bool QwenCausalLM::ForwardHidden(const MetalContext& context,
                               0,
                               weights_.blocks.size(),
                               true,
+                              RangeCommandStreamMode::kDefault,
                               error_message);
 }
 
@@ -404,6 +416,7 @@ bool QwenCausalLM::ForwardHiddenRange(const MetalContext& context,
                                       std::size_t start_layer,
                                       std::size_t end_layer,
                                       bool apply_final_norm,
+                                      RangeCommandStreamMode command_stream_mode,
                                       std::string* error_message) const {
     if (!token_ids.IsValid() || !output.IsValid()) {
         if (error_message != nullptr) {
@@ -468,6 +481,7 @@ bool QwenCausalLM::ForwardHiddenRange(const MetalContext& context,
                          start_layer,
                          end_layer,
                          apply_final_norm,
+                         command_stream_mode,
                          error_message);
 }
 
@@ -480,6 +494,7 @@ bool QwenCausalLM::ForwardHiddenFromStatesRange(const MetalContext& context,
                                                 std::size_t start_layer,
                                                 std::size_t end_layer,
                                                 bool apply_final_norm,
+                                                RangeCommandStreamMode command_stream_mode,
                                                 std::string* error_message) const {
     return RunBlockRange(context,
                          pipeline_cache,
@@ -493,6 +508,7 @@ bool QwenCausalLM::ForwardHiddenFromStatesRange(const MetalContext& context,
                          start_layer,
                          end_layer,
                          apply_final_norm,
+                         command_stream_mode,
                          error_message);
 }
 
@@ -514,6 +530,7 @@ bool QwenCausalLM::ForwardHiddenCached(const MetalContext& context,
                                     0,
                                     weights_.blocks.size(),
                                     true,
+                                    RangeCommandStreamMode::kDefault,
                                     error_message);
 }
 
@@ -527,6 +544,7 @@ bool QwenCausalLM::ForwardHiddenCachedRange(const MetalContext& context,
                                             std::size_t start_layer,
                                             std::size_t end_layer,
                                             bool apply_final_norm,
+                                            RangeCommandStreamMode command_stream_mode,
                                             std::string* error_message) const {
     if (kv_cache == nullptr) {
         if (error_message != nullptr) {
@@ -584,6 +602,7 @@ bool QwenCausalLM::ForwardHiddenCachedRange(const MetalContext& context,
                          start_layer,
                          end_layer,
                          apply_final_norm,
+                         command_stream_mode,
                          error_message);
 }
 
@@ -597,6 +616,7 @@ bool QwenCausalLM::ForwardHiddenFromStatesCachedRange(const MetalContext& contex
                                                       std::size_t start_layer,
                                                       std::size_t end_layer,
                                                       bool apply_final_norm,
+                                                      RangeCommandStreamMode command_stream_mode,
                                                       std::string* error_message) const {
     if (kv_cache == nullptr) {
         if (error_message != nullptr) {
@@ -616,6 +636,7 @@ bool QwenCausalLM::ForwardHiddenFromStatesCachedRange(const MetalContext& contex
                          start_layer,
                          end_layer,
                          apply_final_norm,
+                         command_stream_mode,
                          error_message);
 }
 
@@ -642,6 +663,7 @@ bool QwenCausalLM::ForwardLogits(const MetalContext& context,
                                 0,
                                 weights_.blocks.size(),
                                 false,
+                                RangeCommandStreamMode::kDefault,
                                 error_message)) {
             return false;
         }
@@ -685,6 +707,7 @@ bool QwenCausalLM::ForwardLogitsCached(const MetalContext& context,
                                       0,
                                       weights_.blocks.size(),
                                       false,
+                                      RangeCommandStreamMode::kDefault,
                                       error_message)) {
             return false;
         }

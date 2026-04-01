@@ -221,6 +221,56 @@ batching은 계속 실험하되, `안전한 op 묶음`과 `hazard 추적` 없이
 - Apple Silicon fast path는 `PyTorch MPS`, `SDPA`, 그리고 `MetalLinear + affine_qmm_t` 같은 low-bit Metal kernel integration에서 나온다.
 - 즉 PyTorch를 정말 넘기려면, 지금의 dense decode matmul 최적화 다음 단계는 결국 `low-bit fused qmm`다.
 
+## 2026-04-01 GitHub 재감사 요약
+
+이번에는 comparison 문서에 적혀 있던 판단을 GitHub 메인라인 구현으로 다시 검증했다. 대상 4개 repo는 `llama.cpp`, `flash-moe`, `mlx-lm`, `mlx-vlm`이다. 보조 비교로 `transformers`의 Metal quantization도 다시 확인했다.
+
+### 공통 결론 1. prefill과 decode를 같은 정책으로 다루면 안 된다
+
+- `llama.cpp`는 `ubatch + graph reserve`로 prefill을 다루고, decode는 hazard-aware graph encode로 다룬다.
+- `mlx-lm`, `mlx-vlm`은 `prefill_step_size`를 별도 노브로 두고, decode는 generation stream 위에서 따로 돈다.
+- `flash-moe`도 사실상 decode-heavy 엔진이라, 짧은 seq에서 GPU attention을 아예 끄고 길이 조건을 둔다.
+
+결론:
+
+우리도 `prefill_step_size`와 `decode stage plan`을 분리해야 한다.
+
+### 공통 결론 2. decode 최적화의 핵심은 작은 안전 경계 또는 low-bit fused linear다
+
+- `llama.cpp`는 real mem range hazard tracking으로 안전한 범위만 묶는다.
+- `flash-moe`는 low-bit fused matvec와 stage 구조화로 decode를 줄인다.
+- `transformers`의 Apple Silicon fast path도 결국 `MetalLinear + affine_qmm_t`다.
+
+결론:
+
+우리 다음 2축은 계속 같다.
+
+1. `real hazard tracker`
+2. `low-bit fused decode projection`
+
+### 공통 결론 3. runtime policy가 아직 우리 쪽에서 가장 약하다
+
+- `mlx-lm`은 prompt cache, rotating/quantized KV, working set budget이 있다.
+- `mlx-vlm`은 input preparation, embeddings prefill, prefill/completion batch knob가 있다.
+- 우리는 kernel과 runtime policy가 아직 더 강하게 결합돼 있다.
+
+결론:
+
+`Mac/gpu`의 중기 과제는 새 kernel만이 아니라 아래 세 가지다.
+
+1. `prefill_step_size`
+2. `prompt cache artifact`
+3. `KV policy abstraction`
+
+## 적용 우선순위 갱신
+
+1. `real range hazard tracker + decode plan`
+2. `prefill_step_size + prompt cache`
+3. `low-bit fused decode projection`을 dense/q4 공용 설계로 재정리
+4. 이후에만 추가 shape-specialized dense kernel을 본다
+
+이번 GitHub 재감사 기준으로, 현재 우리 문서의 방향 자체는 크게 틀리지 않았다. 다만 빠진 것은 `prefill/decode 분리`, `prompt cache`, `real hazard range` 세 축이고, 다음 반영은 이 세 가지를 중심으로 잡는 것이 맞다.
+
 ## 이번 턴의 추가 실험 결과
 
 ### `LMHeadDecode` 4-col kernel

@@ -7,26 +7,18 @@
 namespace soc::gpu {
 namespace {
 
-enum class PlanResourceSlot {
-    kHidden0,
-    kHidden1,
-    kLogits,
-};
-
-struct PlanAccess {
-    PlanResourceSlot slot;
-    bool write = false;
-};
-
 class HazardTracker {
 public:
-    bool CanMerge(const std::vector<PlanAccess>& accesses) const {
-        for (const PlanAccess& access : accesses) {
-            for (const PlanAccess& prior : active_accesses_) {
-                if (prior.slot != access.slot) {
+    bool CanMerge(const std::vector<DecodePlanAccessRange>& accesses) const {
+        for (const DecodePlanAccessRange& access : accesses) {
+            for (const DecodePlanAccessRange& prior : active_accesses_) {
+                if (prior.buffer_kind != access.buffer_kind) {
                     continue;
                 }
-                if (prior.write || access.write) {
+                const std::size_t prior_end = prior.byte_offset + prior.byte_size;
+                const std::size_t access_end = access.byte_offset + access.byte_size;
+                const bool overlaps = prior.byte_offset < access_end && access.byte_offset < prior_end;
+                if (overlaps && (prior.write || access.write)) {
                     return false;
                 }
             }
@@ -34,14 +26,14 @@ public:
         return true;
     }
 
-    void Record(const std::vector<PlanAccess>& accesses) {
+    void Record(const std::vector<DecodePlanAccessRange>& accesses) {
         active_accesses_.insert(active_accesses_.end(), accesses.begin(), accesses.end());
     }
 
     void Reset() { active_accesses_.clear(); }
 
 private:
-    std::vector<PlanAccess> active_accesses_;
+    std::vector<DecodePlanAccessRange> active_accesses_;
 };
 
 bool UseExperimentalPrebuiltDecodePlan() {
@@ -59,28 +51,64 @@ bool UseExperimentalSafeDecodeBatch() {
     return value != nullptr && std::string(value) == "1";
 }
 
-std::vector<PlanAccess> StageAccesses(const DecodePlanStage& stage) {
+std::vector<DecodePlanAccessRange> StageAccesses(const DecodePlanStage& stage,
+                                                 const QwenCausalLM& model,
+                                                 const KVCache& kv_cache) {
+    const std::size_t hidden_bytes = model.params().hidden_size * sizeof(float);
+    const std::size_t logits_bytes = model.vocab_size() * sizeof(float);
     switch (stage.kind) {
         case DecodePlanStage::Kind::kEmbedAndFirstLayer:
-        case DecodePlanStage::Kind::kLayer:
+        case DecodePlanStage::Kind::kLayer: {
+            const KVCacheByteRange kv_range = kv_cache.DescribeLayerAppendByteRange(stage.start_layer, 1);
             return {
-                {stage.input_slot == 0 ? PlanResourceSlot::kHidden0 : PlanResourceSlot::kHidden1, false},
-                {stage.output_slot == 0 ? PlanResourceSlot::kHidden0 : PlanResourceSlot::kHidden1, true},
+                {stage.input_slot == 0 ? DecodePlanBufferKind::kHiddenSlot0 : DecodePlanBufferKind::kHiddenSlot1,
+                 0,
+                 hidden_bytes,
+                 false},
+                {stage.output_slot == 0 ? DecodePlanBufferKind::kHiddenSlot0 : DecodePlanBufferKind::kHiddenSlot1,
+                 0,
+                 hidden_bytes,
+                 true},
+                {DecodePlanBufferKind::kKvKeys, kv_range.byte_offset, kv_range.byte_size, true},
+                {DecodePlanBufferKind::kKvValues, kv_range.byte_offset, kv_range.byte_size, true},
             };
+        }
         case DecodePlanStage::Kind::kLogits:
             return {
-                {stage.input_slot == 0 ? PlanResourceSlot::kHidden0 : PlanResourceSlot::kHidden1, false},
-                {PlanResourceSlot::kLogits, true},
+                {stage.input_slot == 0 ? DecodePlanBufferKind::kHiddenSlot0 : DecodePlanBufferKind::kHiddenSlot1,
+                 0,
+                 hidden_bytes,
+                 false},
+                {DecodePlanBufferKind::kLogits, 0, logits_bytes, true},
             };
     }
     return {};
 }
 
-std::unique_ptr<DecodeExecutionPlan> BuildDecodePlan(const QwenCausalLM& model) {
+void RefreshDecodePlanAccesses(DecodeExecutionPlan* plan, const QwenCausalLM& model, const KVCache& kv_cache) {
+    if (plan == nullptr) {
+        return;
+    }
+
+    HazardTracker tracker;
+    std::size_t batch_id = 0;
+    for (DecodePlanStage& stage : plan->stages) {
+        stage.accesses = StageAccesses(stage, model, kv_cache);
+        if (!tracker.CanMerge(stage.accesses)) {
+            tracker.Reset();
+            ++batch_id;
+        }
+        stage.batch_id = batch_id;
+        tracker.Record(stage.accesses);
+    }
+}
+
+std::unique_ptr<DecodeExecutionPlan> BuildDecodePlan(const QwenCausalLM& model, const KVCache& kv_cache) {
     auto plan = std::make_unique<DecodeExecutionPlan>();
     plan->layer_count = model.num_layers();
     plan->hidden_size = model.params().hidden_size;
     plan->vocab_size = model.vocab_size();
+    plan->max_sequence_length = kv_cache.GetMaxSequenceLength();
     plan->q4_decode_enabled = UseExperimentalQ4Decode();
     plan->safe_decode_batch_enabled = UseExperimentalSafeDecodeBatch();
 
@@ -99,7 +127,8 @@ std::unique_ptr<DecodeExecutionPlan> BuildDecodePlan(const QwenCausalLM& model) 
         stage.output_slot = next_slot;
         stage.label = stage.kind == DecodePlanStage::Kind::kEmbedAndFirstLayer ? "DecodePlanEmbedLayer0" : "DecodePlanLayer";
 
-        const std::vector<PlanAccess> accesses = StageAccesses(stage);
+        stage.accesses = StageAccesses(stage, model, kv_cache);
+        const std::vector<DecodePlanAccessRange>& accesses = stage.accesses;
         if (!tracker.CanMerge(accesses)) {
             tracker.Reset();
             ++batch_id;
@@ -118,7 +147,8 @@ std::unique_ptr<DecodeExecutionPlan> BuildDecodePlan(const QwenCausalLM& model) 
     logits_stage.input_slot = current_slot;
     logits_stage.output_slot = current_slot;
     logits_stage.label = "DecodePlanLogits";
-    const std::vector<PlanAccess> logits_accesses = StageAccesses(logits_stage);
+    logits_stage.accesses = StageAccesses(logits_stage, model, kv_cache);
+    const std::vector<DecodePlanAccessRange>& logits_accesses = logits_stage.accesses;
     if (!tracker.CanMerge(logits_accesses)) {
         tracker.Reset();
         ++batch_id;
@@ -126,6 +156,7 @@ std::unique_ptr<DecodeExecutionPlan> BuildDecodePlan(const QwenCausalLM& model) 
     logits_stage.batch_id = batch_id;
     tracker.Record(logits_accesses);
     plan->stages.push_back(logits_stage);
+    RefreshDecodePlanAccesses(plan.get(), model, kv_cache);
     return plan;
 }
 
@@ -208,12 +239,13 @@ bool CommandScheduler::RunDecodeWithPlan(const MetalContext& context,
                                          BufferArena* temporary_arena,
                                          std::size_t position_offset,
                                          std::string* error_message) const {
-    if (!EnsureDecodePlan(model)) {
+    if (!EnsureDecodePlan(model, *kv_cache)) {
         if (error_message != nullptr) {
             *error_message = "Failed to build decode execution plan";
         }
         return false;
     }
+    RefreshDecodePlanAccesses(decode_plan_.get(), model, *kv_cache);
     if (!EnsureHiddenBuffer(context, 0, model.params().hidden_size, error_message) ||
         !EnsureHiddenBuffer(context, 1, model.params().hidden_size, error_message)) {
         return false;
@@ -224,38 +256,56 @@ bool CommandScheduler::RunDecodeWithPlan(const MetalContext& context,
         DeviceTensor(decode_hidden_buffers_[1], 0, hidden_desc),
     };
 
-    for (const DecodePlanStage& stage : decode_plan_->stages) {
+    for (std::size_t stage_index = 0; stage_index < decode_plan_->stages.size();) {
+        const DecodePlanStage& stage = decode_plan_->stages[stage_index];
         switch (stage.kind) {
             case DecodePlanStage::Kind::kEmbedAndFirstLayer:
-                if (!model.ForwardHiddenCachedRange(context,
-                                                    pipeline_cache,
-                                                    token_ids,
-                                                    kv_cache,
-                                                    hidden_slots[stage.output_slot],
-                                                    temporary_arena,
-                                                    position_offset,
-                                                    stage.start_layer,
-                                                    stage.end_layer,
-                                                    stage.apply_final_norm,
-                                                    error_message)) {
+            case DecodePlanStage::Kind::kLayer: {
+                std::size_t group_end_index = stage_index;
+                while (group_end_index + 1 < decode_plan_->stages.size()) {
+                    const DecodePlanStage& next_stage = decode_plan_->stages[group_end_index + 1];
+                    if (next_stage.kind == DecodePlanStage::Kind::kLogits || next_stage.batch_id != stage.batch_id) {
+                        break;
+                    }
+                    group_end_index += 1;
+                }
+
+                const DecodePlanStage& group_last_stage = decode_plan_->stages[group_end_index];
+                const RangeCommandStreamMode stream_mode = group_end_index > stage_index
+                    ? RangeCommandStreamMode::kFullRange
+                    : RangeCommandStreamMode::kOff;
+
+                const bool ok = stage.kind == DecodePlanStage::Kind::kEmbedAndFirstLayer
+                    ? model.ForwardHiddenCachedRange(context,
+                                                     pipeline_cache,
+                                                     token_ids,
+                                                     kv_cache,
+                                                     hidden_slots[group_last_stage.output_slot],
+                                                     temporary_arena,
+                                                     position_offset,
+                                                     stage.start_layer,
+                                                     group_last_stage.end_layer,
+                                                     group_last_stage.apply_final_norm,
+                                                     stream_mode,
+                                                     error_message)
+                    : model.ForwardHiddenFromStatesCachedRange(context,
+                                                               pipeline_cache,
+                                                               hidden_slots[stage.input_slot],
+                                                               kv_cache,
+                                                               hidden_slots[group_last_stage.output_slot],
+                                                               temporary_arena,
+                                                               position_offset,
+                                                               stage.start_layer,
+                                                               group_last_stage.end_layer,
+                                                               group_last_stage.apply_final_norm,
+                                                               stream_mode,
+                                                               error_message);
+                if (!ok) {
                     return false;
                 }
+                stage_index = group_end_index + 1;
                 break;
-            case DecodePlanStage::Kind::kLayer:
-                if (!model.ForwardHiddenFromStatesCachedRange(context,
-                                                              pipeline_cache,
-                                                              hidden_slots[stage.input_slot],
-                                                              kv_cache,
-                                                              hidden_slots[stage.output_slot],
-                                                              temporary_arena,
-                                                              position_offset,
-                                                              stage.start_layer,
-                                                              stage.end_layer,
-                                                              stage.apply_final_norm,
-                                                              error_message)) {
-                    return false;
-                }
-                break;
+            }
             case DecodePlanStage::Kind::kLogits:
                 if (!model.ForwardLogitsFromHidden(context,
                                                    pipeline_cache,
@@ -265,6 +315,7 @@ bool CommandScheduler::RunDecodeWithPlan(const MetalContext& context,
                                                    error_message)) {
                     return false;
                 }
+                stage_index += 1;
                 break;
         }
     }
@@ -272,16 +323,17 @@ bool CommandScheduler::RunDecodeWithPlan(const MetalContext& context,
     return true;
 }
 
-bool CommandScheduler::EnsureDecodePlan(const QwenCausalLM& model) const {
+bool CommandScheduler::EnsureDecodePlan(const QwenCausalLM& model, const KVCache& kv_cache) const {
     if (decode_plan_ != nullptr &&
         decode_plan_->layer_count == model.num_layers() &&
         decode_plan_->hidden_size == model.params().hidden_size &&
         decode_plan_->vocab_size == model.vocab_size() &&
+        decode_plan_->max_sequence_length == kv_cache.GetMaxSequenceLength() &&
         decode_plan_->q4_decode_enabled == UseExperimentalQ4Decode() &&
         decode_plan_->safe_decode_batch_enabled == UseExperimentalSafeDecodeBatch()) {
         return true;
     }
-    decode_plan_ = BuildDecodePlan(model);
+    decode_plan_ = BuildDecodePlan(model, kv_cache);
     return decode_plan_ != nullptr;
 }
 

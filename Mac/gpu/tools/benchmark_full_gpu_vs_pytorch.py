@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", default="Hello world")
     parser.add_argument("--max-new-tokens", type=int, default=64)
     parser.add_argument("--gpu-runs", type=int, default=3)
+    parser.add_argument("--gpu-cached-runs", type=int, default=-1)
     parser.add_argument("--pytorch-runs", type=int, default=3)
     parser.add_argument("--pytorch-warmup", type=int, default=1)
     parser.add_argument("--python-bin", default="python3")
@@ -49,6 +50,7 @@ def run_gpu_case(infer_bin: Path,
                  prompt: str,
                  max_new_tokens: int,
                  output_path: Path,
+                 extra_args: list[str],
                  env_overrides: dict[str, str],
                  timeout_seconds: int) -> dict:
     command = [
@@ -65,6 +67,7 @@ def run_gpu_case(infer_bin: Path,
         "--output-file",
         str(output_path),
     ]
+    command.extend(extra_args)
     env = os.environ.copy()
     env.update(env_overrides)
     run_command(command, env=env, timeout_seconds=timeout_seconds)
@@ -110,8 +113,13 @@ def summarize_gpu_runs(payloads: list[dict]) -> dict:
     wait_ms = [float(payload["timing"].get("wait_ms", 0.0)) for payload in payloads]
     command_buffer_count = [int(payload["timing"].get("command_buffer_count", 0)) for payload in payloads]
     encoder_count = [int(payload["timing"].get("encoder_count", 0)) for payload in payloads]
+    prefill_ms = [float(payload["timing"].get("prefill_ms", payload["timing"]["wall_ms"])) for payload in payloads]
+    decode_ms = [float(payload["timing"].get("decode_ms", payload["timing"]["wall_ms"])) for payload in payloads]
     generated_counts = [len(payload["generated_token_ids"]) for payload in payloads]
+    prompt_counts = [len(payload["prompt_token_ids"]) for payload in payloads]
     total_tok_s = [count / max(ms / 1000.0, 1.0e-9) for count, ms in zip(generated_counts, wall_ms)]
+    prefill_tok_s = [count / max(ms / 1000.0, 1.0e-9) for count, ms in zip(prompt_counts, prefill_ms)]
+    decode_tok_s = [count / max(ms / 1000.0, 1.0e-9) for count, ms in zip(generated_counts, decode_ms)]
     aggregated_entries: dict[str, dict[str, float]] = {}
     for payload in payloads:
         for entry in payload["timing"].get("entries", []):
@@ -135,6 +143,11 @@ def summarize_gpu_runs(payloads: list[dict]) -> dict:
     return {
         "runs": len(payloads),
         "generated_tokens_avg": statistics.mean(generated_counts),
+        "prompt_tokens_avg": statistics.mean(prompt_counts),
+        "prefill_ms_avg": statistics.mean(prefill_ms),
+        "decode_ms_avg": statistics.mean(decode_ms),
+        "prefill_tok_per_s_avg": statistics.mean(prefill_tok_s),
+        "decode_tok_per_s_avg": statistics.mean(decode_tok_s),
         "wall_ms_avg": statistics.mean(wall_ms),
         "wall_ms_min": min(wall_ms),
         "gpu_ms_avg": statistics.mean(gpu_ms),
@@ -145,6 +158,7 @@ def summarize_gpu_runs(payloads: list[dict]) -> dict:
         "total_tok_per_s_max": max(total_tok_s),
         "timing_entries_avg": mean_entries,
         "last_generated_text": payloads[-1]["generated_text"],
+        "prompt_cache_mode": str(payloads[-1].get("prompt_cache", {}).get("mode", "disabled")),
     }
 
 
@@ -158,6 +172,7 @@ def summarize_pytorch_run(payload: dict) -> dict:
         "prompt_tokens": int(payload["prompt_tokens"]),
         "generated_tokens_avg": decode_tokens,
         "prefill_ms": float(payload["prefill_ms"]),
+        "prefill_tok_per_s": float(payload["prefill_tok_per_s"]),
         "decode_time_ms": float(payload["decode_time_ms"]),
         "decode_tok_per_s": float(payload["decode_tok_per_s"]),
         "total_time_ms": total_time_ms,
@@ -173,6 +188,7 @@ def write_report(report_path: Path,
                  manifest: Path,
                  hf_model: Path,
                  gpu_summary: dict,
+                 gpu_cached_summary: dict | None,
                  pytorch_summary: dict) -> None:
     speedup = gpu_summary["total_tok_per_s_avg"] / max(pytorch_summary["total_tok_per_s"], 1.0e-9)
     lines = [
@@ -186,6 +202,10 @@ def write_report(report_path: Path,
         "| Runtime | Metric | Value |",
         "| --- | --- | ---: |",
         f"| C++ full GPU | runs | {gpu_summary['runs']} |",
+        f"| C++ full GPU | prefill_ms_avg | {gpu_summary['prefill_ms_avg']:.2f} |",
+        f"| C++ full GPU | decode_ms_avg | {gpu_summary['decode_ms_avg']:.2f} |",
+        f"| C++ full GPU | prefill_tok_per_s_avg | {gpu_summary['prefill_tok_per_s_avg']:.3f} |",
+        f"| C++ full GPU | decode_tok_per_s_avg | {gpu_summary['decode_tok_per_s_avg']:.3f} |",
         f"| C++ full GPU | generated_tokens_avg | {gpu_summary['generated_tokens_avg']:.2f} |",
         f"| C++ full GPU | wall_ms_avg | {gpu_summary['wall_ms_avg']:.2f} |",
         f"| C++ full GPU | wall_ms_min | {gpu_summary['wall_ms_min']:.2f} |",
@@ -206,6 +226,8 @@ def write_report(report_path: Path,
         "## Readout",
         "",
         f"- C++ full GPU vs PyTorch total throughput ratio: `{speedup:.3f}x`",
+        f"- C++ full GPU vs PyTorch prefill throughput ratio: `{gpu_summary['prefill_tok_per_s_avg'] / max(pytorch_summary['prefill_tok_per_s'], 1.0e-9):.3f}x`",
+        f"- C++ full GPU vs PyTorch decode throughput ratio: `{gpu_summary['decode_tok_per_s_avg'] / max(pytorch_summary['decode_tok_per_s'], 1.0e-9):.3f}x`",
         f"- C++ full GPU preview: `{gpu_summary['last_generated_text'].strip()}`",
         f"- PyTorch MPS preview: `{pytorch_summary['generated_text'].strip()}`",
         "",
@@ -218,6 +240,34 @@ def write_report(report_path: Path,
         lines.append(
             f"| {entry['label']} | {entry['gpu_ms_avg']:.2f} | {entry['wait_ms_avg']:.2f} | {entry['command_buffer_count_avg']:.2f} | {entry['encoder_count_avg']:.2f} |"
         )
+    if gpu_cached_summary is not None:
+        cached_total_ratio = gpu_cached_summary["total_tok_per_s_avg"] / max(pytorch_summary["total_tok_per_s"], 1.0e-9)
+        cached_decode_ratio = gpu_cached_summary["decode_tok_per_s_avg"] / max(pytorch_summary["decode_tok_per_s"], 1.0e-9)
+        cached_prefill_ratio = gpu_cached_summary["prefill_tok_per_s_avg"] / max(pytorch_summary["prefill_tok_per_s"], 1.0e-9)
+        lines.extend([
+            "",
+            "## C++ GPU Cached Prompt",
+            "",
+            "- Artifact creation happens out-of-band once; cached runs below measure artifact load as prefill and cached decode separately.",
+            "",
+            "| Runtime | Metric | Value |",
+            "| --- | --- | ---: |",
+            f"| C++ GPU cached | runs | {gpu_cached_summary['runs']} |",
+            f"| C++ GPU cached | prompt_cache_mode | {gpu_cached_summary['prompt_cache_mode']} |",
+            f"| C++ GPU cached | prefill_ms_avg | {gpu_cached_summary['prefill_ms_avg']:.2f} |",
+            f"| C++ GPU cached | decode_ms_avg | {gpu_cached_summary['decode_ms_avg']:.2f} |",
+            f"| C++ GPU cached | prefill_tok_per_s_avg | {gpu_cached_summary['prefill_tok_per_s_avg']:.3f} |",
+            f"| C++ GPU cached | decode_tok_per_s_avg | {gpu_cached_summary['decode_tok_per_s_avg']:.3f} |",
+            f"| C++ GPU cached | total_tok_per_s_avg | {gpu_cached_summary['total_tok_per_s_avg']:.3f} |",
+            f"| C++ GPU cached | wall_ms_avg | {gpu_cached_summary['wall_ms_avg']:.2f} |",
+            "",
+            "## Cached Readout",
+            "",
+            f"- C++ GPU cached vs PyTorch total throughput ratio: `{cached_total_ratio:.3f}x`",
+            f"- C++ GPU cached vs PyTorch prefill throughput ratio: `{cached_prefill_ratio:.3f}x`",
+            f"- C++ GPU cached vs PyTorch decode throughput ratio: `{cached_decode_ratio:.3f}x`",
+            f"- C++ GPU cached preview: `{gpu_cached_summary['last_generated_text'].strip()}`",
+        ])
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -233,6 +283,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     gpu_env = parse_env_overrides(args.gpu_env)
+    gpu_cached_runs = args.gpu_runs if args.gpu_cached_runs < 0 else args.gpu_cached_runs
 
     gpu_payloads: list[dict] = []
     for index in range(args.gpu_runs):
@@ -242,8 +293,32 @@ def main() -> None:
                                          args.prompt,
                                          args.max_new_tokens,
                                          gpu_output_path,
+                                         [],
                                          gpu_env,
                                          args.gpu_timeout_seconds))
+
+    artifact_path = output_dir / "prompt_cache_artifact.bin"
+    artifact_build_output_path = output_dir / "gpu_cached_artifact_build.json"
+    run_gpu_case(infer_bin,
+                 manifest,
+                 args.prompt,
+                 0,
+                 artifact_build_output_path,
+                 ["--prompt-cache-artifact-save", str(artifact_path)],
+                 gpu_env,
+                 args.gpu_timeout_seconds)
+
+    gpu_cached_payloads: list[dict] = []
+    for index in range(gpu_cached_runs):
+        gpu_cached_output_path = output_dir / f"gpu_cached_run_{index + 1}.json"
+        gpu_cached_payloads.append(run_gpu_case(infer_bin,
+                                                manifest,
+                                                args.prompt,
+                                                args.max_new_tokens,
+                                                gpu_cached_output_path,
+                                                ["--prompt-cache-artifact-load", str(artifact_path)],
+                                                gpu_env,
+                                                args.gpu_timeout_seconds))
 
     pytorch_output_path = output_dir / "pytorch_mps.json"
     pytorch_payload = run_pytorch_case(args.python_bin,
@@ -257,16 +332,18 @@ def main() -> None:
                                        pytorch_output_path)
 
     gpu_summary = summarize_gpu_runs(gpu_payloads)
+    gpu_cached_summary = summarize_gpu_runs(gpu_cached_payloads)
     pytorch_summary = summarize_pytorch_run(pytorch_payload)
 
     summary = {
         "prompt": args.prompt,
         "max_new_tokens": args.max_new_tokens,
         "cpp_full_gpu": gpu_summary,
+        "cpp_gpu_cached": gpu_cached_summary,
         "pytorch_mps": pytorch_summary,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    write_report(report_path, args.prompt, args.max_new_tokens, manifest, hf_model, gpu_summary, pytorch_summary)
+    write_report(report_path, args.prompt, args.max_new_tokens, manifest, hf_model, gpu_summary, gpu_cached_summary, pytorch_summary)
 
 
 if __name__ == "__main__":

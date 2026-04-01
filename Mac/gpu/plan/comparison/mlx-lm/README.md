@@ -140,3 +140,39 @@
 - memory budget aware runtime
 
 이다.
+
+## 2026-04-01 GitHub 재검토: prefill / decode 최적화
+
+GitHub 메인라인에서 다시 확인한 핵심 파일은 다음과 같다.
+
+- `mlx_lm/generate.py`
+- `mlx_lm/models/cache.py`
+- `mlx_lm/cache_prompt.py`
+- `mlx_lm/server.py`
+
+### prefill에서 실제로 하는 일
+
+1. `generate_step()`는 `prefill_step_size`를 기본 옵션으로 받고, prompt를 이 step 크기만큼 잘라서 순차 처리한다.
+2. 각 prefill chunk마다 model 호출 후 `mx.eval([c.state for c in prompt_cache])`로 KV state를 고정하고 `mx.clear_cache()`로 working set을 비운다.
+3. prompt cache는 `make_prompt_cache()`, `save_prompt_cache()`, `load_prompt_cache()`로 별도 lifecycle을 가지며, prefill 결과를 artifact로 저장해 반복 prompt를 재사용할 수 있다.
+4. batch prefill도 따로 있다. `BatchGenerator._process_prompts()`는 left padding, right padding, merged cache, checkpoint token을 조합해 여러 prompt를 chunked prefill로 처리한다.
+5. long context 대응은 cache 종류로 푼다. `KVCache`, `RotatingKVCache`, `ChunkedKVCache`, `BatchKVCache`, `BatchRotatingKVCache`가 모두 prefill 형태와 메모리 budget에 맞춰 선택된다.
+
+### decode에서 실제로 하는 일
+
+1. decode는 별도 `generation_stream = mx.new_stream(...)` 위에서 돌아가고, `_step()`은 이 stream 안에서 logits 계산과 sampling 직전 처리까지 수행한다.
+2. `mx.async_eval()`를 이용해 다음 token 계산을 미리 걸어 두고, host는 detokenize와 bookkeeping만 한다. 즉 decode는 작은 비동기 겹침을 기본 동작으로 사용한다.
+3. KV quantization도 decode 중간에 들어간다. `maybe_quantize_kv_cache()`가 offset이 `quantized_kv_start`를 넘으면 cache를 quantized form으로 바꾼다.
+4. speculative decode도 `_prefill()`과 `_step()`을 따로 갖고 있어, prefill과 decode의 비용 모델이 구조적으로 분리돼 있다.
+5. server path는 `prompt-concurrency`, `completion-batch-size`, `prefill-step-size`, prompt cache LRU를 모두 runtime option으로 드러낸다.
+
+### 지금 우리에게 바로 적용할 점
+
+1. `prefill_step_size`를 `Mac/gpu`에 넣고, 각 chunk 뒤에 temp arena / Metal cache를 명시적으로 정리하는 흐름을 추가한다.
+2. prompt cache artifact를 도입해서 benchmark 시 prefill과 decode를 실제 artifact 기준으로 분리한다.
+3. `KVCache`를 단일 구현으로 두지 말고, 최소한 `contiguous`, `rotating`, `future quantized` 인터페이스를 먼저 연다.
+4. `recommended_max_working_set_size`를 그냥 로깅하는 대신, prefill step 크기와 future kv max length에 연결한다.
+
+### 이번 재검토의 결론
+
+`mlx-lm`의 prefill 최적화는 `chunked prefill + prompt cache + memory budget`, decode 최적화는 `generation stream + async_eval + cache policy switching`에 있다. 우리 쪽에서 가장 빨리 옮길 수 있는 건 새 kernel이 아니라 `prefill_step_size`, `prompt cache`, `KV policy abstraction`이다.

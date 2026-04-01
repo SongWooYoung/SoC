@@ -54,6 +54,11 @@ bool UseExperimentalDeferredMlpWait() {
     return value != nullptr && std::string(value) == "1";
 }
 
+bool DisablePostNormMlpBatch() {
+    const char* value = std::getenv("SOC_GPU_DISABLE_POSTNORM_MLP_BATCH");
+    return value != nullptr && std::string(value) == "1";
+}
+
 struct DecodeBlockScratch {
     std::shared_ptr<MetalBuffer> attention_output_buffer;
     std::shared_ptr<MetalBuffer> post_attention_norm_buffer;
@@ -256,7 +261,9 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
     CommandStream local_stream;
     CommandStream* active_stream = stream;
     const bool use_local_decode_batch = decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch();
-    if (use_local_decode_batch) {
+    const bool use_postnorm_mlp_batch =
+        decode_mode && stream == nullptr && !UseExperimentalSafeDecodeBatch() && !DisablePostNormMlpBatch();
+    if (use_local_decode_batch || use_postnorm_mlp_batch) {
         if (!local_stream.Begin(context, error_message)) {
             return false;
         }
@@ -305,7 +312,7 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
         return false;
     }
 
-    if (use_local_decode_batch) {
+    if (use_local_decode_batch || use_postnorm_mlp_batch) {
         if (use_persistent_decode_scratch) {
             if (!local_stream.FlushDeferred(context, "DecodePostNormMlpBatch", error_message)) {
                 return false;

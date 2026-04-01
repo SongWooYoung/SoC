@@ -47,6 +47,30 @@ bool UseExperimentalLmHeadKernel() {
     return value != nullptr && std::string(value) == "1";
 }
 
+bool UseDetailedMatMulProfiling() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_MATMUL_PROFILE_DETAIL");
+    return value != nullptr && std::string(value) == "1";
+}
+
+std::string BuildMatMulProfileLabel(const MatMulParams& params,
+                                    const KernelKey& key,
+                                    const MatMulExecutionPolicy& policy) {
+    const std::string base_label = params.profile_label == nullptr ? "MatMul" : std::string(params.profile_label);
+    if (!UseDetailedMatMulProfiling()) {
+        return base_label;
+    }
+
+    std::ostringstream stream;
+    stream << base_label
+           << "[fn=" << key.function_name
+           << ",tg=" << key.threadgroup_width << "x" << key.threadgroup_height
+           << ",tile=" << policy.tile_columns << "x" << policy.tile_rows
+           << ",mode=" << (params.decode_mode ? "decode" : "prefill")
+           << ",rhs=" << (params.transpose_rhs ? "T" : "N")
+           << "]";
+    return stream.str();
+}
+
 struct MetalMatMulParams {
     std::uint32_t row_count;
     std::uint32_t inner_dim;
@@ -421,10 +445,10 @@ bool MatMulOp::Run(const MetalContext& context,
             stream->EndEncoder();
         } else {
             [encoder endEncoding];
-            const char* profile_label = params.profile_label == nullptr ? "MatMul" : params.profile_label;
+            const std::string profile_label_storage = BuildMatMulProfileLabel(params, key, policy);
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,
                                                "MatMul command buffer failed",
-                                               profile_label,
+                                               profile_label_storage.c_str(),
                                                1,
                                                error_message)) {
                 return false;
