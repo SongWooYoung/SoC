@@ -72,7 +72,11 @@ bool EnsureTopKBuffers(const MetalContext& context,
 
     const std::size_t values_bytes = sizeof(float) * top_k;
     if (*top_values_buffer == nullptr || (*top_values_buffer)->GetSizeBytes() < values_bytes) {
-        *top_values_buffer = MetalBuffer::CreateShared(context, values_bytes, "sampler_top_values", error_message);
+        *top_values_buffer = MetalBuffer::CreateForTensorClass(context,
+                                                               values_bytes,
+                                                               "sampler_top_values",
+                                                               TensorClass::kTokenMetadata,
+                                                               error_message);
         if (*top_values_buffer == nullptr) {
             return false;
         }
@@ -80,7 +84,11 @@ bool EnsureTopKBuffers(const MetalContext& context,
 
     const std::size_t indices_bytes = sizeof(std::int32_t) * top_k;
     if (*top_indices_buffer == nullptr || (*top_indices_buffer)->GetSizeBytes() < indices_bytes) {
-        *top_indices_buffer = MetalBuffer::CreateShared(context, indices_bytes, "sampler_top_indices", error_message);
+        *top_indices_buffer = MetalBuffer::CreateForTensorClass(context,
+                                                                indices_bytes,
+                                                                "sampler_top_indices",
+                                                                TensorClass::kTokenMetadata,
+                                                                error_message);
         if (*top_indices_buffer == nullptr) {
             return false;
         }

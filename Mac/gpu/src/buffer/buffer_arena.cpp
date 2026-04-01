@@ -33,7 +33,11 @@ std::unique_ptr<BufferArena> BufferArena::CreateShared(const MetalContext& conte
                                                        std::size_t capacity_bytes,
                                                        const std::string& label,
                                                        std::string* error_message) {
-    auto buffer = MetalBuffer::CreateShared(context, capacity_bytes, label, error_message);
+    auto buffer = MetalBuffer::CreateForTensorClass(context,
+                                                    capacity_bytes,
+                                                    label,
+                                                    TensorClass::kTemporary,
+                                                    error_message);
     if (buffer == nullptr) {
         return nullptr;
     }

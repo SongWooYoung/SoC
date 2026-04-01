@@ -13,6 +13,7 @@
 #include "op/rms_norm_op.h"
 #include "op/rope_op.h"
 #include "op/softmax_op.h"
+#include "runtime/runtime_policy.h"
 
 namespace soc::gpu {
 namespace {
@@ -38,6 +39,11 @@ bool UseExperimentalBlockPrepBatch() {
 
 bool UseExperimentalAttentionFullBatch() {
     const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_ATTENTION_FULL_BATCH");
+    return value != nullptr && std::string(value) == "1";
+}
+
+bool UseExperimentalPrefillAttentionBatch() {
+    const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_PREFILL_ATTENTION_BATCH");
     return value != nullptr && std::string(value) == "1";
 }
 
@@ -606,12 +612,17 @@ bool RunAttentionInternal(const MetalContext& context,
         stream == nullptr &&
         !UseExperimentalSafeDecodeBatch() &&
         !DisableAttentionPrepBatch();
+    const bool use_prefill_attention_batch =
+        !decode_mode &&
+        stream == nullptr &&
+        UseExperimentalPrefillAttentionBatch();
     const bool use_attention_tail_batch =
         decode_mode &&
         stream == nullptr &&
         !UseExperimentalSafeDecodeBatch() &&
         !DisableAttentionTailBatch();
     const bool use_attention_output_batch = use_attention_tail_batch && !DisableAttentionOutputBatch();
+    const std::size_t encoder_budget = decode_mode ? ResolveCommandStreamEncoderBudget(context) : 0;
 
     const std::size_t rotary_dim = params.rotary_dim == 0 ? params.head_dim : params.rotary_dim;
     const TensorDesc query_desc = TensorDesc::CreateContiguous(DataType::kFloat32, {row_count, query_hidden_size});
@@ -637,7 +648,7 @@ bool RunAttentionInternal(const MetalContext& context,
         return false;
     }
 
-    if (use_attention_full_batch || use_local_decode_batch || use_attention_prep_batch) {
+    if (use_attention_full_batch || use_local_decode_batch || use_attention_prep_batch || use_prefill_attention_batch) {
         if (!local_stream.Begin(context, error_message)) {
             return false;
         }
@@ -845,6 +856,12 @@ bool RunAttentionInternal(const MetalContext& context,
             return false;
         }
         active_stream = &local_stream;
+    } else if (decode_mode && stream != nullptr && encoder_budget > 0 && stream->GetEncoderCount() >= encoder_budget) {
+        if (!stream->Flush(context, use_external_decode_prep_stream ? "DecodeBlockPrepBatch" : "DecodeAttnPrepBatch", error_message) ||
+            !stream->Begin(context, error_message)) {
+            return false;
+        }
+        active_stream = stream;
     }
 
     std::size_t sequence_length_before_append = 0;
@@ -945,6 +962,12 @@ bool RunAttentionInternal(const MetalContext& context,
             return false;
         }
         tail_active_stream = nullptr;
+    } else if (decode_mode && tail_active_stream == stream && encoder_budget > 0 && stream->GetEncoderCount() >= encoder_budget) {
+        if (!stream->Flush(context, "DecodeAttentionTailBatch", error_message) ||
+            !stream->Begin(context, error_message)) {
+            return false;
+        }
+        tail_active_stream = stream;
     }
 
     if (decode_mode) {
@@ -994,6 +1017,14 @@ bool RunAttentionInternal(const MetalContext& context,
             return false;
         }
         tail_active_stream = nullptr;
+    }
+
+    if (use_prefill_attention_batch) {
+        if (!local_stream.Flush(context, "PrefillAttentionBatch", error_message)) {
+            return false;
+        }
+        tail_active_stream = nullptr;
+        active_stream = nullptr;
     }
 
     if (use_attention_full_batch) {

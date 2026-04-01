@@ -9,6 +9,7 @@
 
 #include "buffer/buffer_arena.h"
 #include "buffer/metal_buffer.h"
+#include "runtime/runtime_policy.h"
 
 namespace soc::gpu {
 namespace {
@@ -148,7 +149,10 @@ bool GenerationContext::Prefill(const MetalContext& context,
         return false;
     }
 
-    const std::size_t step_size = prefill_step_size_ == 0 ? token_ids.size() : std::min(prefill_step_size_, token_ids.size());
+    EnsureRuntimePolicyResolved(context);
+
+    const std::size_t configured_step_size = runtime_policy_.prefill_step_size;
+    const std::size_t step_size = configured_step_size == 0 ? token_ids.size() : std::min(configured_step_size, token_ids.size());
     const BufferArenaMark prefill_mark = temporary_arena == nullptr ? 0 : temporary_arena->GetMark();
 
     for (std::size_t chunk_start = 0; chunk_start < token_ids.size(); chunk_start += step_size) {
@@ -175,7 +179,6 @@ bool GenerationContext::Prefill(const MetalContext& context,
                                    error_message)) {
             return false;
         }
-
         if (temporary_arena != nullptr && !temporary_arena->ResetToMark(prefill_mark, error_message)) {
             return false;
         }
@@ -190,6 +193,7 @@ bool GenerationContext::DecodeNextToken(const MetalContext& context,
                                         BufferArena* temporary_arena,
                                         GenerationStepResult* result,
                                         std::string* error_message) {
+    EnsureRuntimePolicyResolved(context);
     if (result == nullptr) {
         if (error_message != nullptr) {
             *error_message = "GenerationContext decode requires a non-null result";
@@ -287,6 +291,7 @@ bool GenerationContext::GenerateFromLoadedPromptCache(const MetalContext& contex
                                                       BufferArena* temporary_arena,
                                                       std::vector<int>* generated_token_ids,
                                                       std::string* error_message) {
+    EnsureRuntimePolicyResolved(context);
     if (generated_token_ids == nullptr) {
         if (error_message != nullptr) {
             *error_message = "GenerationContext generate-from-cache requires a non-null generated_token_ids output";
@@ -414,6 +419,7 @@ bool GenerationContext::SavePromptCacheArtifact(const MetalContext& context,
 bool GenerationContext::LoadPromptCacheArtifact(const MetalContext& context,
                                                 const std::string& artifact_path,
                                                 std::string* error_message) {
+    EnsureRuntimePolicyResolved(context);
     std::ifstream stream(artifact_path, std::ios::binary);
     if (!stream.is_open()) {
         if (error_message != nullptr) {
@@ -495,6 +501,12 @@ void GenerationContext::Reset() {
 const std::vector<int>& GenerationContext::prompt_token_ids() const { return prompt_token_ids_; }
 const std::vector<int>& GenerationContext::running_token_ids() const { return running_token_ids_; }
 const QwenCausalLM& GenerationContext::model() const { return model_; }
+const CommandScheduler& GenerationContext::scheduler() const { return scheduler_; }
+const RuntimePolicy& GenerationContext::runtime_policy() const { return runtime_policy_; }
+
+void GenerationContext::EnsureRuntimePolicyResolved(const MetalContext& context) {
+    runtime_policy_ = ResolveRuntimePolicy(context, prefill_step_size_);
+}
 
 bool GenerationContext::EnsureLogitsBuffer(const MetalContext& context,
                                            std::size_t row_count,
@@ -503,7 +515,11 @@ bool GenerationContext::EnsureLogitsBuffer(const MetalContext& context,
     if (logits_buffer_ != nullptr && logits_buffer_->GetSizeBytes() >= required_size) {
         return true;
     }
-    logits_buffer_ = MetalBuffer::CreateShared(context, required_size, "generation_logits", error_message);
+    logits_buffer_ = MetalBuffer::CreateForTensorClass(context,
+                                                       required_size,
+                                                       "generation_logits",
+                                                       TensorClass::kTemporary,
+                                                       error_message);
     return logits_buffer_ != nullptr;
 }
 
@@ -514,7 +530,11 @@ bool GenerationContext::EnsureTokenBuffer(const MetalContext& context,
     if (token_buffer_ != nullptr && token_buffer_->GetSizeBytes() >= required_size) {
         return true;
     }
-    token_buffer_ = MetalBuffer::CreateShared(context, required_size, "generation_tokens", error_message);
+    token_buffer_ = MetalBuffer::CreateForTensorClass(context,
+                                                      required_size,
+                                                      "generation_tokens",
+                                                      TensorClass::kTokenMetadata,
+                                                      error_message);
     return token_buffer_ != nullptr;
 }
 

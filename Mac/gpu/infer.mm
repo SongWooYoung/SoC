@@ -20,6 +20,7 @@
 #include "model/qwen_model_loader.h"
 #include "runtime/command_scheduler.h"
 #include "runtime/generation_context.h"
+#include "runtime/runtime_policy.h"
 #include "runtime/sampler.h"
 
 #include "header/generation_session.h"
@@ -72,6 +73,8 @@ struct InferenceRunResult {
     double prompt_cache_load_ms = 0.0;
     std::string prompt_cache_mode = "disabled";
     soc::gpu::MetalProfilingSnapshot profile;
+    soc::gpu::DecodePlanRunStats decode_plan_stats;
+    soc::gpu::RuntimePolicy runtime_policy;
 };
 
 [[noreturn]] void PrintUsageAndExit(const char* executable, int exit_code) {
@@ -266,10 +269,11 @@ soc::gpu::DeviceTensor UploadGpuTokenIds(const soc::gpu::MetalContext& context,
                                          const std::vector<int>& token_ids,
                                          const std::string& label,
                                          std::string* error_message) {
-    auto token_buffer = soc::gpu::MetalBuffer::CreateShared(context,
-                                                            token_ids.size() * sizeof(std::int32_t),
-                                                            label,
-                                                            error_message);
+    auto token_buffer = soc::gpu::MetalBuffer::CreateForTensorClass(context,
+                                                                    token_ids.size() * sizeof(std::int32_t),
+                                                                    label,
+                                                                    soc::gpu::TensorClass::kTokenMetadata,
+                                                                    error_message);
     if (token_buffer == nullptr) {
         return {};
     }
@@ -289,7 +293,11 @@ soc::gpu::DeviceTensor CreateGpuFloatTensor(const soc::gpu::MetalContext& contex
     for (std::size_t dim : shape) {
         element_count *= dim;
     }
-    auto buffer = soc::gpu::MetalBuffer::CreateShared(context, element_count * sizeof(float), label, error_message);
+    auto buffer = soc::gpu::MetalBuffer::CreateForTensorClass(context,
+                                                              element_count * sizeof(float),
+                                                              label,
+                                                              soc::gpu::TensorClass::kTemporary,
+                                                              error_message);
     if (buffer == nullptr) {
         return {};
     }
@@ -418,6 +426,65 @@ std::string JsonStringArray(const std::vector<std::string>& values) {
     return stream.str();
 }
 
+std::string JsonSizeArray(const std::vector<std::size_t>& values) {
+    std::ostringstream stream;
+    stream << '[';
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index != 0) {
+            stream << ", ";
+        }
+        stream << values[index];
+    }
+    stream << ']';
+    return stream.str();
+}
+
+const char* DecodePlanBufferKindName(soc::gpu::DecodePlanBufferKind buffer_kind) {
+    switch (buffer_kind) {
+        case soc::gpu::DecodePlanBufferKind::kHiddenSlot0:
+            return "hidden_slot0";
+        case soc::gpu::DecodePlanBufferKind::kHiddenSlot1:
+            return "hidden_slot1";
+        case soc::gpu::DecodePlanBufferKind::kLogits:
+            return "logits";
+        case soc::gpu::DecodePlanBufferKind::kKvKeys:
+            return "kv_keys";
+        case soc::gpu::DecodePlanBufferKind::kKvValues:
+            return "kv_values";
+    }
+    return "unknown";
+}
+
+const char* DecodePlanHazardKindName(bool prior_write, bool current_write) {
+    if (prior_write && current_write) {
+        return "write_after_write";
+    }
+    if (prior_write) {
+        return "read_after_write";
+    }
+    return "write_after_read";
+}
+
+std::string JsonDecodePlanStageBlockers(const std::vector<soc::gpu::DecodePlanRunStats::StageBlocker>& blockers) {
+    std::ostringstream stream;
+    stream << '[';
+    for (std::size_t index = 0; index < blockers.size(); ++index) {
+        const auto& blocker = blockers[index];
+        if (index != 0) {
+            stream << ", ";
+        }
+        stream << "{\"stage_index\": " << blocker.stage_index
+               << ", \"stage_label\": \"" << JsonEscape(blocker.stage_label) << "\""
+               << ", \"prior_stage_index\": " << blocker.prior_stage_index
+               << ", \"prior_stage_label\": \"" << JsonEscape(blocker.prior_stage_label) << "\""
+               << ", \"buffer_kind\": \"" << DecodePlanBufferKindName(blocker.buffer_kind) << "\""
+               << ", \"hazard_kind\": \"" << DecodePlanHazardKindName(blocker.prior_write, blocker.current_write) << "\""
+               << '}';
+    }
+    stream << ']';
+    return stream.str();
+}
+
 std::string JsonProfilingEntries(const soc::gpu::MetalProfilingSnapshot& snapshot) {
     std::ostringstream stream;
     stream << '[';
@@ -507,6 +574,8 @@ InferenceRunResult RunFullGpuInference(const soc::gpu::MetalContext& context,
     run.wall_ms = DurationMilliseconds(start_time, Clock::now());
     run.profile = context.GetProfilingSnapshot();
     run.gpu_ms = run.profile.gpu_ms;
+    run.decode_plan_stats = generation_context.scheduler().last_decode_plan_run_stats();
+    run.runtime_policy = generation_context.runtime_policy();
     run.generated_text = TokenizerRuntime(tokenizer_runtime).Decode(run.generated_token_ids);
     return run;
 }
@@ -676,7 +745,9 @@ std::string BuildPrimaryOutput(const CliOptions& options,
                                const soc::gpu::MetalDeviceInfo& device_info,
                                double wall_ms,
                                double gpu_ms,
-                               const soc::gpu::MetalProfilingSnapshot& profile) {
+                               const soc::gpu::MetalProfilingSnapshot& profile,
+                               const soc::gpu::DecodePlanRunStats& decode_plan_stats,
+                               const soc::gpu::RuntimePolicy& runtime_policy) {
     if (!options.json_output) {
         return generated_text + "\n";
     }
@@ -716,7 +787,14 @@ std::string BuildPrimaryOutput(const CliOptions& options,
     stream << "    \"name\": \"" << JsonEscape(device_info.name) << "\",\n";
     stream << "    \"is_apple_silicon_gpu\": " << (device_info.is_apple_silicon_gpu ? "true" : "false") << ",\n";
     stream << "    \"has_unified_memory\": " << (device_info.has_unified_memory ? "true" : "false") << ",\n";
+    stream << "    \"recommended_max_working_set_size\": " << device_info.recommended_max_working_set_size << ",\n";
     stream << "    \"thread_execution_width\": " << device_info.thread_execution_width << "\n";
+    stream << "  },\n";
+    stream << "  \"runtime_policy\": {\n";
+    stream << "    \"prefill_step_size\": " << runtime_policy.prefill_step_size << ",\n";
+    stream << "    \"command_stream_encoder_budget\": " << runtime_policy.command_stream_encoder_budget << ",\n";
+    stream << "    \"working_set_budget_bytes\": " << runtime_policy.working_set_budget_bytes << ",\n";
+    stream << "    \"recommended_max_working_set_size\": " << runtime_policy.recommended_max_working_set_size << "\n";
     stream << "  },\n";
     stream << "  \"timing\": {\n";
     stream << "    \"prefill_ms\": " << prefill_ms << ",\n";
@@ -729,6 +807,25 @@ std::string BuildPrimaryOutput(const CliOptions& options,
     stream << "    \"command_buffer_count\": " << profile.command_buffer_count << ",\n";
     stream << "    \"encoder_count\": " << profile.encoder_count << ",\n";
     stream << "    \"entries\": " << JsonProfilingEntries(profile) << "\n";
+    stream << "  },\n";
+    stream << "  \"decode_plan\": {\n";
+    stream << "    \"used_prebuilt_plan\": " << (decode_plan_stats.used_prebuilt_plan ? "true" : "false") << ",\n";
+    stream << "    \"stage_count\": " << decode_plan_stats.stage_count << ",\n";
+    stream << "    \"layer_stage_count\": " << decode_plan_stats.layer_stage_count << ",\n";
+    stream << "    \"execution_group_count\": " << decode_plan_stats.execution_group_count << ",\n";
+    stream << "    \"merged_range_count\": " << decode_plan_stats.merged_range_count << ",\n";
+    stream << "    \"merged_stage_count\": " << decode_plan_stats.merged_stage_count << ",\n";
+    stream << "    \"max_group_size\": " << decode_plan_stats.max_group_size << ",\n";
+    stream << "    \"group_sizes\": " << JsonSizeArray(decode_plan_stats.group_sizes) << ",\n";
+    stream << "    \"hidden_slot0_blocker_count\": " << decode_plan_stats.hidden_slot0_blocker_count << ",\n";
+    stream << "    \"hidden_slot1_blocker_count\": " << decode_plan_stats.hidden_slot1_blocker_count << ",\n";
+    stream << "    \"logits_blocker_count\": " << decode_plan_stats.logits_blocker_count << ",\n";
+    stream << "    \"kv_keys_blocker_count\": " << decode_plan_stats.kv_keys_blocker_count << ",\n";
+    stream << "    \"kv_values_blocker_count\": " << decode_plan_stats.kv_values_blocker_count << ",\n";
+    stream << "    \"read_after_write_blocker_count\": " << decode_plan_stats.read_after_write_blocker_count << ",\n";
+    stream << "    \"write_after_read_blocker_count\": " << decode_plan_stats.write_after_read_blocker_count << ",\n";
+    stream << "    \"write_after_write_blocker_count\": " << decode_plan_stats.write_after_write_blocker_count << ",\n";
+    stream << "    \"stage_blockers\": " << JsonDecodePlanStageBlockers(decode_plan_stats.stage_blockers) << "\n";
     stream << "  }\n";
     stream << "}\n";
     return stream.str();
@@ -769,7 +866,9 @@ void PrintVerboseSummary(const CliOptions& options,
                          const soc::gpu::MetalDeviceInfo& device_info,
                          double wall_ms,
                          double gpu_ms,
-                         const soc::gpu::MetalProfilingSnapshot& profile) {
+                            const soc::gpu::MetalProfilingSnapshot& profile,
+                            const soc::gpu::DecodePlanRunStats& decode_plan_stats,
+                            const soc::gpu::RuntimePolicy& runtime_policy) {
     std::cerr << "manifest=" << options.manifest_path << "\n";
     if (!options.prompt_file.empty()) {
         std::cerr << "prompt_file=" << options.prompt_file << "\n";
@@ -781,7 +880,11 @@ void PrintVerboseSummary(const CliOptions& options,
     std::cerr << "execution_mode=" << plan.mode << "\n";
     std::cerr << "requested_layer=" << plan.requested_layer << " resolved_gpu_layers=" << plan.resolved_gpu_layers << " model_layer_count=" << plan.model_layer_count << "\n";
     std::cerr << "device=" << device_info.name << "\n";
+    std::cerr << "recommended_max_working_set_size=" << device_info.recommended_max_working_set_size << "\n";
     std::cerr << "prompt_cache_mode=" << prompt_cache_mode << "\n";
+    std::cerr << "runtime_policy_prefill_step_size=" << runtime_policy.prefill_step_size << "\n";
+    std::cerr << "runtime_policy_command_stream_encoder_budget=" << runtime_policy.command_stream_encoder_budget << "\n";
+    std::cerr << "runtime_policy_working_set_budget_bytes=" << runtime_policy.working_set_budget_bytes << "\n";
     std::cerr << "max_new_tokens=" << generated_token_ids.size() << "\n";
     if (prepared_prompt != prompt_text) {
         std::cerr << "serialized_prompt=" << prepared_prompt << "\n";
@@ -796,6 +899,26 @@ void PrintVerboseSummary(const CliOptions& options,
     std::cerr << "wait_ms=" << profile.wait_ms << "\n";
     std::cerr << "command_buffer_count=" << profile.command_buffer_count << "\n";
     std::cerr << "encoder_count=" << profile.encoder_count << "\n";
+    std::cerr << "decode_plan_used_prebuilt_plan=" << (decode_plan_stats.used_prebuilt_plan ? 1 : 0) << "\n";
+    std::cerr << "decode_plan_execution_group_count=" << decode_plan_stats.execution_group_count << "\n";
+    std::cerr << "decode_plan_merged_range_count=" << decode_plan_stats.merged_range_count << "\n";
+    std::cerr << "decode_plan_merged_stage_count=" << decode_plan_stats.merged_stage_count << "\n";
+    std::cerr << "decode_plan_max_group_size=" << decode_plan_stats.max_group_size << "\n";
+    std::cerr << "decode_plan_hidden_slot0_blocker_count=" << decode_plan_stats.hidden_slot0_blocker_count << "\n";
+    std::cerr << "decode_plan_hidden_slot1_blocker_count=" << decode_plan_stats.hidden_slot1_blocker_count << "\n";
+    std::cerr << "decode_plan_logits_blocker_count=" << decode_plan_stats.logits_blocker_count << "\n";
+    std::cerr << "decode_plan_kv_keys_blocker_count=" << decode_plan_stats.kv_keys_blocker_count << "\n";
+    std::cerr << "decode_plan_kv_values_blocker_count=" << decode_plan_stats.kv_values_blocker_count << "\n";
+    std::cerr << "decode_plan_read_after_write_blocker_count=" << decode_plan_stats.read_after_write_blocker_count << "\n";
+    std::cerr << "decode_plan_write_after_read_blocker_count=" << decode_plan_stats.write_after_read_blocker_count << "\n";
+    std::cerr << "decode_plan_write_after_write_blocker_count=" << decode_plan_stats.write_after_write_blocker_count << "\n";
+    for (const auto& blocker : decode_plan_stats.stage_blockers) {
+        std::cerr << "decode_plan_blocker[" << blocker.stage_index << "] stage=" << blocker.stage_label
+                  << " prior_stage_index=" << blocker.prior_stage_index
+                  << " prior_stage=" << blocker.prior_stage_label
+                  << " buffer_kind=" << DecodePlanBufferKindName(blocker.buffer_kind)
+                  << " hazard_kind=" << DecodePlanHazardKindName(blocker.prior_write, blocker.current_write) << "\n";
+    }
     for (const auto& entry : profile.entries) {
         std::cerr << "profile[" << entry.label << "] gpu_ms=" << entry.gpu_ms
                   << " wait_ms=" << entry.wait_ms
@@ -902,7 +1025,9 @@ int main(int argc, char** argv) {
                                                        context->GetDeviceInfo(),
                                                        run.wall_ms,
                                                        run.gpu_ms,
-                                                       run.profile);
+                                                       run.profile,
+                                                      run.decode_plan_stats,
+                                                      run.runtime_policy);
         WritePrimaryOutput(options, payload);
 
         if (options.verbose) {
@@ -919,7 +1044,9 @@ int main(int argc, char** argv) {
                                 context->GetDeviceInfo(),
                                 run.wall_ms,
                                 run.gpu_ms,
-                                run.profile);
+                                run.profile,
+                                run.decode_plan_stats,
+                                run.runtime_policy);
         }
         return 0;
     } catch (const std::exception& error) {

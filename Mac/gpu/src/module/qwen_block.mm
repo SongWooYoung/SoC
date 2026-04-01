@@ -7,6 +7,7 @@
 #include "buffer/metal_buffer.h"
 #include "metal/command_stream.h"
 #include "op/rms_norm_op.h"
+#include "runtime/runtime_policy.h"
 
 namespace soc::gpu {
 namespace {
@@ -75,7 +76,11 @@ bool EnsureScratchBuffer(const MetalContext& context,
     if (*buffer != nullptr && (*buffer)->GetSizeBytes() >= size_bytes) {
         return true;
     }
-    *buffer = MetalBuffer::CreatePrivate(context, size_bytes, label, error_message);
+    *buffer = MetalBuffer::CreateForTensorClass(context,
+                                                size_bytes,
+                                                label,
+                                                TensorClass::kTemporary,
+                                                error_message);
     return *buffer != nullptr;
 }
 
@@ -153,7 +158,10 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
 
     soc::gpu::BufferArenaMarkGuard arena_mark(temporary_arena, decode_mode ? "QwenBlockDecode" : "QwenBlock");
     soc::gpu::CommandStream prep_stream;
+    soc::gpu::CommandStream local_stream;
     soc::gpu::CommandStream* attention_stream = stream;
+    soc::gpu::CommandStream* active_stream = stream;
+    const std::size_t encoder_budget = decode_mode ? ResolveCommandStreamEncoderBudget(context) : 0;
     const bool use_deferred_mlp_wait =
         decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch() && UseExperimentalDeferredMlpWait();
     const bool use_block_attention_batch =
@@ -162,6 +170,10 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
     const bool use_block_prep_batch =
         decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch() &&
         UseExperimentalBlockPrepBatch() && !UseExperimentalAttentionFullBatch() && !use_block_attention_batch;
+    const bool use_local_decode_batch = decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch() &&
+        !use_block_prep_batch && !use_block_attention_batch;
+    const bool use_postnorm_mlp_batch =
+        decode_mode && stream == nullptr && !UseExperimentalSafeDecodeBatch() && !DisablePostNormMlpBatch();
     if (use_block_prep_batch) {
         if (!prep_stream.Begin(context, error_message)) {
             return false;
@@ -172,6 +184,12 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
             return false;
         }
         attention_stream = &prep_stream;
+    } else if (use_local_decode_batch) {
+        if (!local_stream.Begin(context, error_message)) {
+            return false;
+        }
+        attention_stream = &local_stream;
+        active_stream = &local_stream;
     }
 
     const auto& input_shape = input.GetDesc().GetShape();
@@ -258,12 +276,15 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
         attention_stream = nullptr;
     }
 
-    CommandStream local_stream;
-    CommandStream* active_stream = stream;
-    const bool use_local_decode_batch = decode_mode && stream == nullptr && UseExperimentalSafeDecodeBatch();
-    const bool use_postnorm_mlp_batch =
-        decode_mode && stream == nullptr && !UseExperimentalSafeDecodeBatch() && !DisablePostNormMlpBatch();
-    if (use_local_decode_batch || use_postnorm_mlp_batch) {
+    if (use_local_decode_batch) {
+        if (!local_stream.Flush(context, "DecodeBlockAttentionBatch", error_message)) {
+            return false;
+        }
+        if (!local_stream.Begin(context, error_message)) {
+            return false;
+        }
+        active_stream = &local_stream;
+    } else if (use_postnorm_mlp_batch) {
         if (!local_stream.Begin(context, error_message)) {
             return false;
         }
@@ -284,6 +305,17 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
                                   active_stream,
                                   error_message)) {
         return false;
+    }
+
+    bool split_postnorm_mlp_batch = false;
+    if (use_local_decode_batch && encoder_budget > 0 && local_stream.GetEncoderCount() >= encoder_budget) {
+        if (!local_stream.Flush(context, "DecodePostNormBatch", error_message)) {
+            return false;
+        }
+        if (!local_stream.Begin(context, error_message)) {
+            return false;
+        }
+        split_postnorm_mlp_batch = true;
     }
 
     soc::gpu::QwenMlpParams mlp_params = params.mlp;
@@ -314,10 +346,14 @@ bool RunBlockInternal(const soc::gpu::MetalContext& context,
 
     if (use_local_decode_batch || use_postnorm_mlp_batch) {
         if (use_persistent_decode_scratch) {
-            if (!local_stream.FlushDeferred(context, "DecodePostNormMlpBatch", error_message)) {
+            if (!local_stream.FlushDeferred(context,
+                                           split_postnorm_mlp_batch ? "DecodeMlpBatch" : "DecodePostNormMlpBatch",
+                                           error_message)) {
                 return false;
             }
-        } else if (!local_stream.Flush(context, "DecodePostNormMlpBatch", error_message)) {
+        } else if (!local_stream.Flush(context,
+                                       split_postnorm_mlp_batch ? "DecodeMlpBatch" : "DecodePostNormMlpBatch",
+                                       error_message)) {
             return false;
         }
     }

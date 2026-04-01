@@ -102,11 +102,12 @@ bool LoadFloatingWeight(const MetalContext& context,
 
     const bool preserve_float16_storage = ShouldPreserveFloat16Storage(name, expected_shape, record.dtype);
     if (preserve_float16_storage) {
-        auto buffer = MetalBuffer::CreatePrivateInitialized(context,
-                                                            bytes.data(),
-                                                            bytes.size(),
-                                                            name,
-                                                            error_message);
+        auto buffer = MetalBuffer::CreateInitializedForTensorClass(context,
+                                                                   bytes.data(),
+                                                                   bytes.size(),
+                                                                   name,
+                                                                   TensorClass::kStaticWeight,
+                                                                   error_message);
         if (buffer == nullptr) {
             return false;
         }
@@ -129,11 +130,12 @@ bool LoadFloatingWeight(const MetalContext& context,
         return false;
     }
 
-    auto buffer = MetalBuffer::CreatePrivateInitialized(context,
-                                                        converted.data(),
-                                                        sizeof(float) * converted.size(),
-                                                        name,
-                                                        error_message);
+    auto buffer = MetalBuffer::CreateInitializedForTensorClass(context,
+                                                               converted.data(),
+                                                               sizeof(float) * converted.size(),
+                                                               name,
+                                                               TensorClass::kStaticWeight,
+                                                               error_message);
     if (buffer == nullptr) {
         return false;
     }
@@ -163,7 +165,12 @@ bool LoadRawWeight(const MetalContext& context,
     if (!TensorFileLoader::LoadBytes(*record, &bytes, error_message)) {
         return false;
     }
-    auto buffer = MetalBuffer::CreatePrivateInitialized(context, bytes.data(), bytes.size(), name, error_message);
+    auto buffer = MetalBuffer::CreateInitializedForTensorClass(context,
+                                                               bytes.data(),
+                                                               bytes.size(),
+                                                               name,
+                                                               TensorClass::kStaticWeight,
+                                                               error_message);
     if (buffer == nullptr) {
         return false;
     }

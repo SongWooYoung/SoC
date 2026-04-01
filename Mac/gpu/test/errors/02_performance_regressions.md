@@ -553,3 +553,91 @@
 - `Mac/gpu/build/reports/decode_hang_check_q4_current_qkvspecialized.json`
 - `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_current_qkvspecialized_baseline.md`
 - `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_current_qkvspecialized.md`
+
+## 19. Chunked Prefill Full-Token Upload Reuse
+
+상태: `tested and reverted`
+
+관찰:
+
+1. `GenerationContext::Prefill()`에서 chunk마다 `std::vector<int>`를 다시 만들고 token buffer를 다시 쓰는 대신, full prompt token buffer를 한 번 올리고 chunk view만 재사용하는 variant를 시도했다.
+2. 의도는 unified memory 환경에서 chunked prefill의 host copy / buffer write overhead를 줄이는 것이었다.
+3. `test_generation_context`와 `SOC_GPU_PREFILL_STEP_SIZE=4 REAL_BUNDLE_MAX_NEW_TOKENS=1 make integration-real-bundle`는 통과했다.
+4. 하지만 같은 조건 실측에서 `GPU context` tok/s는 개선되지 않았다. Raw prompt는 대략 `1.506 -> 1.505 tok/s`, chat template prompt는 `0.685 -> 0.680 tok/s` 수준으로 오히려 소폭 악화됐다.
+
+원인 가설:
+
+1. 현재 chunked prefill 병목은 host-side token upload보다 GPU-side prefill matmul/attention compute와 command-buffer scheduling이다.
+2. full prompt를 한 번 쓰고 chunk view를 나누는 변화는 CPU bookkeeping은 줄여도 end-to-end wall을 움직일 만큼 크지 않았다.
+3. 즉 unified memory라는 조건만으로 host upload 최적화가 바로 prefill tok/s 개선으로 이어지지는 않았다.
+
+현재 정책:
+
+1. 이 변경은 유지하지 않는다.
+2. 다음 prefill 실험은 token upload 재사용보다 prefill attention/matmul working-set과 dispatch 구조를 직접 건드리는 쪽으로 간다.
+
+관련 파일:
+
+- `Mac/gpu/src/runtime/generation_context.cpp`
+- `Mac/gpu/build/reports/test_real_bundle_regression_report.md`
+
+## 20. Decode Hidden-Slot Hazard Relaxation
+
+상태: `tested and reverted`
+
+관찰:
+
+1. prebuilt decode plan에서 hidden ping-pong slot overlap을 진짜 external hazard로 보지 않도록 완화해서, adjacent decode layer stage가 더 많이 같은 `batch_id`를 공유하게 하는 variant를 시도했다.
+2. toy plan 기준 `test_generation_context`에서는 layer stage merge 자체는 확인됐다.
+3. 하지만 real-model steady-state decode 측정에서는 tok/s가 개선되지 않았다. `SOC_GPU_ENABLE_EXPERIMENTAL_PREBUILT_DECODE_PLAN=1` baseline은 `15.336 tok/s`, 여기에 hidden-slot hazard relaxation까지 켠 variant는 `15.051 tok/s`였다.
+4. full-run command buffer / encoder count도 둘 다 각각 `2680 / 8560`으로 같아서, 실제 실행 경로에서 의미 있는 dispatch reduction으로 이어지지 않았다.
+
+원인 가설:
+
+1. 현재 prebuilt decode plan의 metadata 병목은 hidden slot overlap 하나만의 문제가 아니거나, 그 완화가 downstream execution batching에 실질적으로 반영되지 않았다.
+2. 즉 metadata 상 `batch_id` merge 가능성이 늘어도, real-model decode wall을 움직일 만큼의 command-buffer reduction은 나오지 않았다.
+
+현재 정책:
+
+1. 이 변경은 유지하지 않는다.
+2. decode metadata 최적화는 다음에 plan/runtime 경계에서 실제 merged range가 command-buffer count를 줄이는지 먼저 계측 가능하게 만든 뒤 다시 시도한다.
+
+관련 파일:
+
+- `Mac/gpu/src/runtime/command_scheduler.cpp`
+- `Mac/gpu/test/runtime/test_generation_context.mm`
+- `Mac/gpu/build/reports/decode_hidden_relax_baseline.md`
+- `Mac/gpu/build/reports/decode_hidden_relax_experimental.md`
+
+## 21. Safe Decode Encoder Budget 8
+
+상태: `tested and kept default-off`
+
+관찰:
+
+1. safe decode batch를 block-level bounded stream으로 재설계한 뒤, `SOC_GPU_COMMAND_STREAM_ENCODER_BUDGET=8`을 실제 runtime policy로 연결해서 oversized attention batch를 강제로 split하는 variant를 측정했다.
+2. baseline reworked q4 safe decode steady-state는 `42.53 tok/s`, `76.26 command buffers/decode-token`이었고, 같은 경로에 budget `8`을 넣으면 `28.00 tok/s`, `104.26 command buffers/decode-token`으로 악화됐다.
+3. end-to-end q4 safe decode도 baseline reworked path는 `30.89 tok/s` decode, `27.84 tok/s` total이었지만, budget `8` variant는 `27.27 tok/s` decode, `24.92 tok/s` total로 내려갔다.
+4. encoder count 자체는 둘 다 `535~552 encoders/token` 수준으로 같아서, 이번 cap은 encoder density를 줄이지 못하고 command buffer fragmentation만 늘렸다.
+
+원인 가설:
+
+1. 현재 safe decode hot path의 병목은 oversize encoder count 자체보다 attention/MLP 내부 encoder 수가 많다는 구조 문제다.
+2. budget `8`은 block attention을 `DecodeAttnPrepBatch`와 `DecodeBlockAttentionBatch`로 다시 쪼개서 wait/flush overhead만 추가했다.
+3. 즉 command-stream encoder budget은 더 높은 cap 또는 다른 natural boundary와 결합해야 의미가 있다.
+
+현재 정책:
+
+1. runtime policy budget wiring과 bounded split hook은 유지한다.
+2. 기본값은 계속 `0`(disabled)로 둔다.
+3. aggressive low cap은 유지하지 않고, 다음 실험은 attention/MLP 내부 encoder 수 자체를 줄이는 방향으로 간다.
+
+관련 파일:
+
+- `Mac/gpu/src/module/qwen_attention.mm`
+- `Mac/gpu/src/module/qwen_block.mm`
+- `Mac/gpu/include/runtime/runtime_policy.h`
+- `Mac/gpu/build/reports/decode_steady_state_q4_safe_batch_rework_baseline.md`
+- `Mac/gpu/build/reports/decode_steady_state_q4_safe_batch_rework_budget8.md`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_safe_batch_rework_baseline.md`
+- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_safe_batch_rework_budget8.md`

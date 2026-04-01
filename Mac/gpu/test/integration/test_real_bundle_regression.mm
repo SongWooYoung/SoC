@@ -44,6 +44,8 @@ struct TimingStats {
     double gpu_ms = 0.0;
     double cpu_active_ratio = 0.0;
     double gpu_active_ratio = 0.0;
+    std::size_t command_buffer_count = 0;
+    std::size_t encoder_count = 0;
 };
 
 struct GenerationRun {
@@ -78,13 +80,19 @@ double ReadProcessCpuMilliseconds() {
     return user_ms + system_ms;
 }
 
-TimingStats FinishTiming(const Clock::time_point& wall_start, double cpu_start_ms, double gpu_ms = 0.0) {
+TimingStats FinishTiming(const Clock::time_point& wall_start,
+                         double cpu_start_ms,
+                         double gpu_ms = 0.0,
+                         std::size_t command_buffer_count = 0,
+                         std::size_t encoder_count = 0) {
     TimingStats stats;
     stats.wall_ms = std::chrono::duration<double, std::milli>(Clock::now() - wall_start).count();
     stats.cpu_ms = ReadProcessCpuMilliseconds() - cpu_start_ms;
     stats.gpu_ms = gpu_ms;
     stats.cpu_active_ratio = stats.wall_ms <= 0.0 ? 0.0 : stats.cpu_ms / stats.wall_ms;
     stats.gpu_active_ratio = stats.wall_ms <= 0.0 ? 0.0 : stats.gpu_ms / stats.wall_ms;
+    stats.command_buffer_count = command_buffer_count;
+    stats.encoder_count = encoder_count;
     return stats;
 }
 
@@ -446,7 +454,11 @@ bool RunGpuManualGeneration(const TokenizerRuntime& tokenizer,
         return false;
     }
     run->generated_token_ids.push_back(run->first_token_id);
-    run->prefill_timing = FinishTiming(prefill_wall_start, prefill_cpu_start_ms, prefill_profile.gpu_ms);
+    run->prefill_timing = FinishTiming(prefill_wall_start,
+                                       prefill_cpu_start_ms,
+                                       prefill_profile.gpu_ms,
+                                       prefill_profile.command_buffer_count,
+                                       prefill_profile.encoder_count);
 
     std::vector<int> running_token_ids = prompt_token_ids;
     running_token_ids.push_back(run->first_token_id);
@@ -504,12 +516,18 @@ bool RunGpuManualGeneration(const TokenizerRuntime& tokenizer,
             }
         }
         const soc::gpu::MetalProfilingSnapshot decode_profile = context.GetProfilingSnapshot();
-        run->decode_timing = FinishTiming(decode_wall_start, decode_cpu_start_ms, decode_profile.gpu_ms);
+        run->decode_timing = FinishTiming(decode_wall_start,
+                                          decode_cpu_start_ms,
+                                          decode_profile.gpu_ms,
+                                          decode_profile.command_buffer_count,
+                                          decode_profile.encoder_count);
     }
 
     run->total_timing = FinishTiming(total_wall_start,
                                      total_cpu_start_ms,
-                                     run->prefill_timing.gpu_ms + run->decode_timing.gpu_ms);
+                                     run->prefill_timing.gpu_ms + run->decode_timing.gpu_ms,
+                                     run->prefill_timing.command_buffer_count + run->decode_timing.command_buffer_count,
+                                     run->prefill_timing.encoder_count + run->decode_timing.encoder_count);
     run->generated_text = tokenizer.Decode(run->generated_token_ids);
     run->peak_temp_bytes = temporary_arena->GetPeakUsedBytes();
     if (recommended_working_set_size > 0) {
@@ -570,7 +588,11 @@ bool RunGpuGenerationContext(const TokenizerRuntime& tokenizer,
         return false;
     }
     const soc::gpu::MetalProfilingSnapshot total_profile = context.GetProfilingSnapshot();
-    run->total_timing = FinishTiming(total_wall_start, total_cpu_start_ms, total_profile.gpu_ms);
+    run->total_timing = FinishTiming(total_wall_start,
+                                     total_cpu_start_ms,
+                                     total_profile.gpu_ms,
+                                     total_profile.command_buffer_count,
+                                     total_profile.encoder_count);
     run->generated_text = tokenizer.Decode(run->generated_token_ids);
     run->first_token_id = run->generated_token_ids.empty() ? -1 : run->generated_token_ids.front();
     run->peak_temp_bytes = temporary_arena->GetPeakUsedBytes();
@@ -651,7 +673,11 @@ bool RunGpuGenerationContextFromPromptCacheArtifact(const TokenizerRuntime& toke
         return false;
     }
     const soc::gpu::MetalProfilingSnapshot prefill_profile = context.GetProfilingSnapshot();
-    run->prefill_timing = FinishTiming(prefill_wall_start, prefill_cpu_start_ms, prefill_profile.gpu_ms);
+    run->prefill_timing = FinishTiming(prefill_wall_start,
+                                       prefill_cpu_start_ms,
+                                       prefill_profile.gpu_ms,
+                                       prefill_profile.command_buffer_count,
+                                       prefill_profile.encoder_count);
 
     context.ResetProfiling();
     const Clock::time_point decode_wall_start = Clock::now();
@@ -667,10 +693,16 @@ bool RunGpuGenerationContextFromPromptCacheArtifact(const TokenizerRuntime& toke
         return false;
     }
     const soc::gpu::MetalProfilingSnapshot decode_profile = context.GetProfilingSnapshot();
-    run->decode_timing = FinishTiming(decode_wall_start, decode_cpu_start_ms, decode_profile.gpu_ms);
+    run->decode_timing = FinishTiming(decode_wall_start,
+                                      decode_cpu_start_ms,
+                                      decode_profile.gpu_ms,
+                                      decode_profile.command_buffer_count,
+                                      decode_profile.encoder_count);
     run->total_timing = FinishTiming(total_wall_start,
                                      total_cpu_start_ms,
-                                     run->prefill_timing.gpu_ms + run->decode_timing.gpu_ms);
+                                     run->prefill_timing.gpu_ms + run->decode_timing.gpu_ms,
+                                     run->prefill_timing.command_buffer_count + run->decode_timing.command_buffer_count,
+                                     run->prefill_timing.encoder_count + run->decode_timing.encoder_count);
     run->generated_text = tokenizer.Decode(run->generated_token_ids);
     run->first_token_id = run->generated_token_ids.empty() ? -1 : run->generated_token_ids.front();
     run->peak_temp_bytes = temporary_arena->GetPeakUsedBytes();
@@ -759,6 +791,38 @@ void AppendCaseReport(std::ostringstream* report,
             << " | " << FormatDouble(gpu_manual_run.decode_timing.gpu_ms)
             << " | n/a"
             << " | " << FormatDouble(gpu_cached_run.decode_timing.gpu_ms) << " |\n";
+            *report << "| Total command buffers | n/a"
+                << " | " << gpu_manual_run.total_timing.command_buffer_count
+                << " | " << gpu_context_run.total_timing.command_buffer_count
+                << " | " << gpu_cached_run.total_timing.command_buffer_count << " |\n";
+            *report << "| Total encoders | n/a"
+                << " | " << gpu_manual_run.total_timing.encoder_count
+                << " | " << gpu_context_run.total_timing.encoder_count
+                << " | " << gpu_cached_run.total_timing.encoder_count << " |\n";
+            *report << "| Prefill command buffers | n/a"
+                << " | " << gpu_manual_run.prefill_timing.command_buffer_count
+                << " | n/a"
+                << " | " << gpu_cached_run.prefill_timing.command_buffer_count << " |\n";
+            *report << "| Prefill encoders | n/a"
+                << " | " << gpu_manual_run.prefill_timing.encoder_count
+                << " | n/a"
+                << " | " << gpu_cached_run.prefill_timing.encoder_count << " |\n";
+            *report << "| Command buffers / prompt token | n/a"
+                << " | " << FormatDouble(SafeDivide(static_cast<double>(gpu_manual_run.total_timing.command_buffer_count),
+                                 static_cast<double>(std::max<std::size_t>(gpu_manual_run.prompt_token_ids.size(), 1))), 6)
+                << " | " << FormatDouble(SafeDivide(static_cast<double>(gpu_context_run.total_timing.command_buffer_count),
+                                 static_cast<double>(std::max<std::size_t>(gpu_context_run.prompt_token_ids.size(), 1))), 6)
+                << " | " << FormatDouble(SafeDivide(static_cast<double>(gpu_cached_run.prefill_timing.command_buffer_count),
+                                 static_cast<double>(std::max<std::size_t>(gpu_cached_run.prompt_token_ids.size(), 1))), 6)
+                << " |\n";
+            *report << "| Encoders / prompt token | n/a"
+                << " | " << FormatDouble(SafeDivide(static_cast<double>(gpu_manual_run.total_timing.encoder_count),
+                                 static_cast<double>(std::max<std::size_t>(gpu_manual_run.prompt_token_ids.size(), 1))), 6)
+                << " | " << FormatDouble(SafeDivide(static_cast<double>(gpu_context_run.total_timing.encoder_count),
+                                 static_cast<double>(std::max<std::size_t>(gpu_context_run.prompt_token_ids.size(), 1))), 6)
+                << " | " << FormatDouble(SafeDivide(static_cast<double>(gpu_cached_run.prefill_timing.encoder_count),
+                                 static_cast<double>(std::max<std::size_t>(gpu_cached_run.prompt_token_ids.size(), 1))), 6)
+                << " |\n";
         *report << "| Prefill ms / prompt token | "
             << FormatDouble(SafeDivide(cpu_run.prefill_timing.wall_ms, static_cast<double>(cpu_run.prompt_token_ids.size())), 6)
             << " | "
@@ -803,6 +867,48 @@ void AppendCaseReport(std::ostringstream* report,
             << FormatDouble(SafeDivide(gpu_manual_run.decode_timing.wall_ms, gpu_manual_run.total_timing.wall_ms), 6) << "\n";
         *report << "- GPU context command-buffer busy share of total wall = "
             << FormatDouble(gpu_context_run.total_timing.gpu_active_ratio, 6) << "\n";
+        *report << "- GPU manual:context command buffers/prompt-token ratio = "
+            << FormatDouble(SafeDivide(SafeDivide(static_cast<double>(gpu_manual_run.total_timing.command_buffer_count),
+                                                 static_cast<double>(std::max<std::size_t>(gpu_manual_run.prompt_token_ids.size(), 1))),
+                                       SafeDivide(static_cast<double>(gpu_context_run.total_timing.command_buffer_count),
+                                                  static_cast<double>(std::max<std::size_t>(gpu_context_run.prompt_token_ids.size(), 1)))),
+                              6) << "\n";
+        *report << "- GPU manual:context encoders/prompt-token ratio = "
+            << FormatDouble(SafeDivide(SafeDivide(static_cast<double>(gpu_manual_run.total_timing.encoder_count),
+                                                 static_cast<double>(std::max<std::size_t>(gpu_manual_run.prompt_token_ids.size(), 1))),
+                                       SafeDivide(static_cast<double>(gpu_context_run.total_timing.encoder_count),
+                                                  static_cast<double>(std::max<std::size_t>(gpu_context_run.prompt_token_ids.size(), 1)))),
+                              6) << "\n";
+        *report << "- GPU cached:manual prefill command buffers/prompt-token ratio = "
+            << FormatDouble(SafeDivide(SafeDivide(static_cast<double>(gpu_cached_run.prefill_timing.command_buffer_count),
+                                                 static_cast<double>(std::max<std::size_t>(gpu_cached_run.prompt_token_ids.size(), 1))),
+                                       SafeDivide(static_cast<double>(gpu_manual_run.prefill_timing.command_buffer_count),
+                                                  static_cast<double>(std::max<std::size_t>(gpu_manual_run.prompt_token_ids.size(), 1)))),
+                              6) << "\n";
+        *report << "- GPU cached:manual prefill encoders/prompt-token ratio = "
+            << FormatDouble(SafeDivide(SafeDivide(static_cast<double>(gpu_cached_run.prefill_timing.encoder_count),
+                                                 static_cast<double>(std::max<std::size_t>(gpu_cached_run.prompt_token_ids.size(), 1))),
+                                       SafeDivide(static_cast<double>(gpu_manual_run.prefill_timing.encoder_count),
+                                                  static_cast<double>(std::max<std::size_t>(gpu_manual_run.prompt_token_ids.size(), 1)))),
+                              6) << "\n";
+            *report << "- GPU cached:context total throughput ratio = "
+                << FormatDouble(SafeDivide(SafeDivide(static_cast<double>(gpu_cached_run.generated_token_ids.size()) * 1000.0,
+                                                     gpu_cached_run.total_timing.wall_ms),
+                                           SafeDivide(static_cast<double>(gpu_context_run.generated_token_ids.size()) * 1000.0,
+                                                     gpu_context_run.total_timing.wall_ms)),
+                              6) << "\n";
+            *report << "- GPU cached:manual decode ms/token ratio = "
+                << FormatDouble(SafeDivide(SafeDivide(gpu_cached_run.decode_timing.wall_ms,
+                                                     static_cast<double>(std::max<std::size_t>(gpu_cached_run.generated_token_ids.size(), 1))),
+                                           SafeDivide(gpu_manual_run.decode_timing.wall_ms,
+                                                     static_cast<double>(std::max<std::size_t>(gpu_manual_run.generated_token_ids.size(), 1)))),
+                              6) << "\n";
+            *report << "- GPU cached:manual decode tok/s ratio = "
+                << FormatDouble(SafeDivide(SafeDivide(static_cast<double>(gpu_cached_run.generated_token_ids.size()) * 1000.0,
+                                                     gpu_cached_run.decode_timing.wall_ms),
+                                           SafeDivide(static_cast<double>(gpu_manual_run.generated_token_ids.size()) * 1000.0,
+                                                     gpu_manual_run.decode_timing.wall_ms)),
+                              6) << "\n";
         *report << "- GPU cached prefill(load) share of total wall = "
             << FormatDouble(SafeDivide(gpu_cached_run.prefill_timing.wall_ms, gpu_cached_run.total_timing.wall_ms), 6) << "\n";
         *report << "- GPU cached decode share of total wall = "

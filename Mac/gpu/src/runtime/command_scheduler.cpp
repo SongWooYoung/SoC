@@ -9,9 +9,18 @@ namespace {
 
 class HazardTracker {
 public:
-    bool CanMerge(const std::vector<DecodePlanAccessRange>& accesses) const {
+    struct Conflict {
+        bool has_conflict = false;
+        DecodePlanBufferKind buffer_kind = DecodePlanBufferKind::kHiddenSlot0;
+        bool prior_write = false;
+        bool access_write = false;
+        std::size_t prior_stage_index = 0;
+        const char* prior_stage_label = nullptr;
+    };
+
+    Conflict FindConflict(const std::vector<DecodePlanAccessRange>& accesses) const {
         for (const DecodePlanAccessRange& access : accesses) {
-            for (const DecodePlanAccessRange& prior : active_accesses_) {
+            for (const ActiveAccess& prior : active_accesses_) {
                 if (prior.buffer_kind != access.buffer_kind) {
                     continue;
                 }
@@ -19,22 +28,81 @@ public:
                 const std::size_t access_end = access.byte_offset + access.byte_size;
                 const bool overlaps = prior.byte_offset < access_end && access.byte_offset < prior_end;
                 if (overlaps && (prior.write || access.write)) {
-                    return false;
+                    return {true,
+                            access.buffer_kind,
+                            prior.write,
+                            access.write,
+                            prior.stage_index,
+                            prior.stage_label};
                 }
             }
         }
-        return true;
+        return {};
     }
 
-    void Record(const std::vector<DecodePlanAccessRange>& accesses) {
-        active_accesses_.insert(active_accesses_.end(), accesses.begin(), accesses.end());
+    bool CanMerge(const std::vector<DecodePlanAccessRange>& accesses) const {
+        return !FindConflict(accesses).has_conflict;
+    }
+
+    void Record(const std::vector<DecodePlanAccessRange>& accesses,
+                std::size_t stage_index,
+                const char* stage_label) {
+        for (const DecodePlanAccessRange& access : accesses) {
+            active_accesses_.push_back({access.buffer_kind,
+                                        access.byte_offset,
+                                        access.byte_size,
+                                        access.write,
+                                        stage_index,
+                                        stage_label});
+        }
     }
 
     void Reset() { active_accesses_.clear(); }
 
 private:
-    std::vector<DecodePlanAccessRange> active_accesses_;
+    struct ActiveAccess {
+        DecodePlanBufferKind buffer_kind = DecodePlanBufferKind::kHiddenSlot0;
+        std::size_t byte_offset = 0;
+        std::size_t byte_size = 0;
+        bool write = false;
+        std::size_t stage_index = 0;
+        const char* stage_label = nullptr;
+    };
+
+    std::vector<ActiveAccess> active_accesses_;
 };
+
+void RecordBlockerStats(const HazardTracker::Conflict& conflict, DecodePlanRunStats* run_stats) {
+    if (run_stats == nullptr || !conflict.has_conflict) {
+        return;
+    }
+
+    switch (conflict.buffer_kind) {
+        case DecodePlanBufferKind::kHiddenSlot0:
+            run_stats->hidden_slot0_blocker_count += 1;
+            break;
+        case DecodePlanBufferKind::kHiddenSlot1:
+            run_stats->hidden_slot1_blocker_count += 1;
+            break;
+        case DecodePlanBufferKind::kLogits:
+            run_stats->logits_blocker_count += 1;
+            break;
+        case DecodePlanBufferKind::kKvKeys:
+            run_stats->kv_keys_blocker_count += 1;
+            break;
+        case DecodePlanBufferKind::kKvValues:
+            run_stats->kv_values_blocker_count += 1;
+            break;
+    }
+
+    if (conflict.prior_write && conflict.access_write) {
+        run_stats->write_after_write_blocker_count += 1;
+    } else if (conflict.prior_write) {
+        run_stats->read_after_write_blocker_count += 1;
+    } else {
+        run_stats->write_after_read_blocker_count += 1;
+    }
+}
 
 bool UseExperimentalPrebuiltDecodePlan() {
     const char* value = std::getenv("SOC_GPU_ENABLE_EXPERIMENTAL_PREBUILT_DECODE_PLAN");
@@ -99,7 +167,7 @@ void RefreshDecodePlanAccesses(DecodeExecutionPlan* plan, const QwenCausalLM& mo
             ++batch_id;
         }
         stage.batch_id = batch_id;
-        tracker.Record(stage.accesses);
+        tracker.Record(stage.accesses, stage.start_layer, stage.label);
     }
 }
 
@@ -134,7 +202,7 @@ std::unique_ptr<DecodeExecutionPlan> BuildDecodePlan(const QwenCausalLM& model, 
             ++batch_id;
         }
         stage.batch_id = batch_id;
-        tracker.Record(accesses);
+        tracker.Record(accesses, layer_index, stage.label);
         plan->stages.push_back(stage);
         std::swap(current_slot, next_slot);
     }
@@ -154,7 +222,7 @@ std::unique_ptr<DecodeExecutionPlan> BuildDecodePlan(const QwenCausalLM& model, 
         ++batch_id;
     }
     logits_stage.batch_id = batch_id;
-    tracker.Record(logits_accesses);
+    tracker.Record(logits_accesses, plan->stages.size(), logits_stage.label);
     plan->stages.push_back(logits_stage);
     RefreshDecodePlanAccesses(plan.get(), model, kv_cache);
     return plan;
@@ -199,6 +267,7 @@ bool CommandScheduler::RunDecode(const MetalContext& context,
                                  BufferArena* temporary_arena,
                                  std::size_t position_offset,
                                  std::string* error_message) const {
+    last_decode_plan_run_stats_ = {};
     const bool use_prebuilt_plan =
         UseExperimentalPrebuiltDecodePlan() &&
         token_ids.IsValid() &&
@@ -230,6 +299,10 @@ const DecodeExecutionPlan* CommandScheduler::decode_plan() const {
     return decode_plan_.get();
 }
 
+const DecodePlanRunStats& CommandScheduler::last_decode_plan_run_stats() const {
+    return last_decode_plan_run_stats_;
+}
+
 bool CommandScheduler::RunDecodeWithPlan(const MetalContext& context,
                                          PipelineCache* pipeline_cache,
                                          const QwenCausalLM& model,
@@ -256,6 +329,30 @@ bool CommandScheduler::RunDecodeWithPlan(const MetalContext& context,
         DeviceTensor(decode_hidden_buffers_[1], 0, hidden_desc),
     };
 
+    DecodePlanRunStats run_stats;
+    run_stats.used_prebuilt_plan = true;
+    run_stats.stage_count = decode_plan_->stages.size();
+    run_stats.layer_stage_count = model.num_layers();
+    HazardTracker blocker_tracker;
+    for (std::size_t blocker_stage_index = 0; blocker_stage_index < decode_plan_->stages.size(); ++blocker_stage_index) {
+        const DecodePlanStage& blocker_stage = decode_plan_->stages[blocker_stage_index];
+        const HazardTracker::Conflict conflict = blocker_tracker.FindConflict(blocker_stage.accesses);
+        if (conflict.has_conflict) {
+            DecodePlanRunStats::StageBlocker stage_blocker;
+            stage_blocker.stage_index = blocker_stage_index;
+            stage_blocker.stage_label = blocker_stage.label == nullptr ? "" : blocker_stage.label;
+            stage_blocker.prior_stage_index = conflict.prior_stage_index;
+            stage_blocker.prior_stage_label = conflict.prior_stage_label == nullptr ? "" : conflict.prior_stage_label;
+            stage_blocker.buffer_kind = conflict.buffer_kind;
+            stage_blocker.prior_write = conflict.prior_write;
+            stage_blocker.current_write = conflict.access_write;
+            run_stats.stage_blockers.push_back(std::move(stage_blocker));
+            RecordBlockerStats(conflict, &run_stats);
+            blocker_tracker.Reset();
+        }
+        blocker_tracker.Record(blocker_stage.accesses, blocker_stage_index, blocker_stage.label);
+    }
+
     for (std::size_t stage_index = 0; stage_index < decode_plan_->stages.size();) {
         const DecodePlanStage& stage = decode_plan_->stages[stage_index];
         switch (stage.kind) {
@@ -268,6 +365,15 @@ bool CommandScheduler::RunDecodeWithPlan(const MetalContext& context,
                         break;
                     }
                     group_end_index += 1;
+                }
+
+                const std::size_t group_size = group_end_index - stage_index + 1;
+                run_stats.group_sizes.push_back(group_size);
+                run_stats.execution_group_count += 1;
+                run_stats.max_group_size = std::max(run_stats.max_group_size, group_size);
+                if (group_size > 1) {
+                    run_stats.merged_range_count += 1;
+                    run_stats.merged_stage_count += group_size - 1;
                 }
 
                 const DecodePlanStage& group_last_stage = decode_plan_->stages[group_end_index];
@@ -320,6 +426,8 @@ bool CommandScheduler::RunDecodeWithPlan(const MetalContext& context,
         }
     }
 
+    last_decode_plan_run_stats_ = run_stats;
+
     return true;
 }
 
@@ -351,8 +459,11 @@ bool CommandScheduler::EnsureHiddenBuffer(const MetalContext& context,
     if (decode_hidden_buffers_[slot] != nullptr && decode_hidden_buffers_[slot]->GetSizeBytes() >= required_size) {
         return true;
     }
-    decode_hidden_buffers_[slot] =
-        MetalBuffer::CreatePrivate(context, required_size, "decode_hidden_plan_slot", error_message);
+    decode_hidden_buffers_[slot] = MetalBuffer::CreateForTensorClass(context,
+                                                                     required_size,
+                                                                     "decode_hidden_plan_slot",
+                                                                     TensorClass::kTemporary,
+                                                                     error_message);
     return decode_hidden_buffers_[slot] != nullptr;
 }
 

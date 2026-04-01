@@ -7,6 +7,7 @@
 
 #include "model/qwen_causal_lm.h"
 #include "runtime/command_scheduler.h"
+#include "runtime/runtime_policy.h"
 #include "runtime/sampler.h"
 
 namespace soc::gpu {
@@ -69,8 +70,11 @@ public:
     const std::vector<int>& prompt_token_ids() const;
     const std::vector<int>& running_token_ids() const;
     const QwenCausalLM& model() const;
+    const CommandScheduler& scheduler() const;
+    const RuntimePolicy& runtime_policy() const;
 
 private:
+    void EnsureRuntimePolicyResolved(const MetalContext& context);
     bool EnsureLogitsBuffer(const MetalContext& context,
                             std::size_t row_count,
                             std::string* error_message);
@@ -87,6 +91,7 @@ private:
     CommandScheduler scheduler_;
     std::size_t max_sequence_length_ = 0;
     std::size_t prefill_step_size_ = 0;
+    RuntimePolicy runtime_policy_;
     std::unique_ptr<KVCache> kv_cache_;
     std::vector<int> prompt_token_ids_;
     std::vector<int> running_token_ids_;

@@ -100,6 +100,32 @@ int main() {
         return 1;
     }
 
+    auto weight_buffer = soc::gpu::MetalBuffer::CreateForTensorClass(*context,
+                                                                     sizeof(float) * 4,
+                                                                     "weight_policy_test",
+                                                                     soc::gpu::TensorClass::kStaticWeight,
+                                                                     &error_message);
+    auto kv_buffer = soc::gpu::MetalBuffer::CreateForTensorClass(*context,
+                                                                 sizeof(float) * 4,
+                                                                 "kv_policy_test",
+                                                                 soc::gpu::TensorClass::kKvCache,
+                                                                 &error_message);
+    auto token_buffer = soc::gpu::MetalBuffer::CreateForTensorClass(*context,
+                                                                    sizeof(std::int32_t) * 4,
+                                                                    "token_policy_test",
+                                                                    soc::gpu::TensorClass::kTokenMetadata,
+                                                                    &error_message);
+    if (weight_buffer == nullptr || kv_buffer == nullptr || token_buffer == nullptr ||
+        weight_buffer->GetStorageMode() != soc::gpu::MetalBufferStorageMode::kPrivate ||
+        kv_buffer->GetStorageMode() != soc::gpu::MetalBufferStorageMode::kPrivate ||
+        token_buffer->GetStorageMode() != soc::gpu::MetalBufferStorageMode::kShared ||
+        weight_buffer->GetTensorClass() != soc::gpu::TensorClass::kStaticWeight ||
+        kv_buffer->GetTensorClass() != soc::gpu::TensorClass::kKvCache ||
+        token_buffer->GetTensorClass() != soc::gpu::TensorClass::kTokenMetadata) {
+        std::cerr << "tensor residency policy mapping is incorrect\n";
+        return 1;
+    }
+
     auto temporary_arena = soc::gpu::BufferArena::CreateShared(*context, 1 << 20, "temp", &error_message);
     if (temporary_arena == nullptr) {
         std::cerr << "failed to create temporary arena: " << error_message << '\n';
@@ -344,6 +370,33 @@ int main() {
     if (decode_plan->stages[1].batch_id <= decode_plan->stages[0].batch_id ||
         decode_plan->stages[2].batch_id <= decode_plan->stages[1].batch_id) {
         std::cerr << "decode plan batch ids did not respect hazards\n";
+        return 1;
+    }
+    const soc::gpu::DecodePlanRunStats& decode_plan_stats = plan_scheduler.last_decode_plan_run_stats();
+    if (!decode_plan_stats.used_prebuilt_plan ||
+        decode_plan_stats.stage_count != 3 ||
+        decode_plan_stats.layer_stage_count != 2 ||
+        decode_plan_stats.execution_group_count != 2 ||
+        decode_plan_stats.merged_range_count != 0 ||
+        decode_plan_stats.merged_stage_count != 0 ||
+        decode_plan_stats.max_group_size != 1 ||
+        decode_plan_stats.group_sizes != std::vector<std::size_t>({1, 1}) ||
+        decode_plan_stats.hidden_slot0_blocker_count != 1 ||
+        decode_plan_stats.hidden_slot1_blocker_count != 1 ||
+        decode_plan_stats.logits_blocker_count != 0 ||
+        decode_plan_stats.kv_keys_blocker_count != 0 ||
+        decode_plan_stats.kv_values_blocker_count != 0 ||
+        decode_plan_stats.read_after_write_blocker_count != 2 ||
+        decode_plan_stats.write_after_read_blocker_count != 0 ||
+        decode_plan_stats.write_after_write_blocker_count != 0 ||
+        decode_plan_stats.stage_blockers.size() != 2 ||
+        decode_plan_stats.stage_blockers[0].stage_index != 1 ||
+        decode_plan_stats.stage_blockers[0].prior_stage_index != 0 ||
+        decode_plan_stats.stage_blockers[0].buffer_kind != soc::gpu::DecodePlanBufferKind::kHiddenSlot1 ||
+        decode_plan_stats.stage_blockers[1].stage_index != 2 ||
+        decode_plan_stats.stage_blockers[1].prior_stage_index != 1 ||
+        decode_plan_stats.stage_blockers[1].buffer_kind != soc::gpu::DecodePlanBufferKind::kHiddenSlot0) {
+        std::cerr << "decode plan run stats are incorrect\n";
         return 1;
     }
 
