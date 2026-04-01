@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -17,9 +18,13 @@
 #include "kernel/pipeline_cache.h"
 #include "metal/metal_context.h"
 #include "model/qwen_causal_lm.h"
-#include "model/qwen_model_loader.h"
+#include "models/model_registry.h"
+#include "models/qwen3/qwen3_loader_adapter.h"
+#include "models/qwen3/qwen3_runner.h"
 #include "runtime/command_scheduler.h"
 #include "runtime/generation_context.h"
+#include "runtime/layer_range_model_runner.h"
+#include "runtime/model_runner.h"
 #include "runtime/runtime_policy.h"
 #include "runtime/sampler.h"
 
@@ -36,6 +41,7 @@ using Clock = std::chrono::steady_clock;
 
 struct CliOptions {
     std::string manifest_path = "../../models/cpp/qwen3-0.6b/manifest.json";
+    std::string model_type;
     std::string metallib_path = "build/shaders/gpu.metallib";
     std::string shader_source_path = "shaders/gpu_kernels.metal";
     std::string prompt;
@@ -82,6 +88,7 @@ struct InferenceRunResult {
         << "Usage: " << executable << " [--manifest <manifest.json>] (--prompt <text> | --prompt-file <path>) [options]\n"
         << "Options:\n"
         << "  --manifest <path>          Model manifest path (default: ../../models/cpp/qwen3-0.6b/manifest.json)\n"
+        << "  --model-type <name>        Override manifest-based model selection (currently: qwen3)\n"
         << "  --prompt <text>            Prompt text to generate from\n"
         << "  --prompt-file <path>       Read prompt text from a UTF-8 text file ('-' reads stdin)\n"
         << "  --output-file <path>       Write the primary result payload to a file instead of stdout\n"
@@ -135,6 +142,8 @@ CliOptions ParseArgs(int argc, char** argv) {
 
         if (argument == "--manifest") {
             options.manifest_path = require_value("--manifest");
+        } else if (argument == "--model-type") {
+            options.model_type = require_value("--model-type");
         } else if (argument == "--prompt") {
             options.prompt = require_value("--prompt");
         } else if (argument == "--prompt-file") {
@@ -439,22 +448,6 @@ std::string JsonSizeArray(const std::vector<std::size_t>& values) {
     return stream.str();
 }
 
-const char* DecodePlanBufferKindName(soc::gpu::DecodePlanBufferKind buffer_kind) {
-    switch (buffer_kind) {
-        case soc::gpu::DecodePlanBufferKind::kHiddenSlot0:
-            return "hidden_slot0";
-        case soc::gpu::DecodePlanBufferKind::kHiddenSlot1:
-            return "hidden_slot1";
-        case soc::gpu::DecodePlanBufferKind::kLogits:
-            return "logits";
-        case soc::gpu::DecodePlanBufferKind::kKvKeys:
-            return "kv_keys";
-        case soc::gpu::DecodePlanBufferKind::kKvValues:
-            return "kv_values";
-    }
-    return "unknown";
-}
-
 const char* DecodePlanHazardKindName(bool prior_write, bool current_write) {
     if (prior_write && current_write) {
         return "write_after_write";
@@ -477,7 +470,7 @@ std::string JsonDecodePlanStageBlockers(const std::vector<soc::gpu::DecodePlanRu
                << ", \"stage_label\": \"" << JsonEscape(blocker.stage_label) << "\""
                << ", \"prior_stage_index\": " << blocker.prior_stage_index
                << ", \"prior_stage_label\": \"" << JsonEscape(blocker.prior_stage_label) << "\""
-               << ", \"buffer_kind\": \"" << DecodePlanBufferKindName(blocker.buffer_kind) << "\""
+               << ", \"resource\": \"" << JsonEscape(blocker.resource_label) << "\""
                << ", \"hazard_kind\": \"" << DecodePlanHazardKindName(blocker.prior_write, blocker.current_write) << "\""
                << '}';
     }
@@ -508,7 +501,7 @@ std::string JsonProfilingEntries(const soc::gpu::MetalProfilingSnapshot& snapsho
 InferenceRunResult RunFullGpuInference(const soc::gpu::MetalContext& context,
                                        soc::gpu::PipelineCache* pipeline_cache,
                                        soc::gpu::BufferArena* temporary_arena,
-                                       soc::gpu::QwenCausalLM gpu_model,
+                                       std::shared_ptr<soc::gpu::ModelRunner> gpu_model,
                                        const RuntimeGenerationOptions& generation,
                                        const std::vector<int>& prompt_token_ids,
                                        const std::string& prompt_cache_artifact_save,
@@ -580,6 +573,34 @@ InferenceRunResult RunFullGpuInference(const soc::gpu::MetalContext& context,
     return run;
 }
 
+bool SupportsCpuReferenceModel(const soc::gpu::ModelSelection& selection) {
+    return selection.architecture == soc::gpu::ModelArchitecture::kQwen3;
+}
+
+std::shared_ptr<soc::gpu::ModelRunner> CreateGpuRunnerForSelection(const soc::gpu::ModelSelection& selection,
+                                                                   const soc::gpu::MetalContext& context,
+                                                                   const std::string& manifest_path,
+                                                                   std::string* error_message) {
+    switch (selection.architecture) {
+        case soc::gpu::ModelArchitecture::kQwen3: {
+            soc::gpu::QwenCausalLMWeights gpu_weights;
+            gpu_weights.tie_word_embeddings = true;
+            soc::gpu::QwenCausalLM gpu_model(std::move(gpu_weights), {});
+            if (!soc::gpu::models::qwen3::LoadGpuModelFromFile(context, manifest_path, &gpu_model, error_message)) {
+                return nullptr;
+            }
+            return std::make_shared<soc::gpu::models::qwen3::Qwen3Runner>(std::move(gpu_model));
+        }
+        case soc::gpu::ModelArchitecture::kUnknown:
+            break;
+    }
+    if (error_message != nullptr) {
+        *error_message = "no GPU runner registered for model architecture " +
+                         std::string(soc::gpu::ModelArchitectureName(selection.architecture));
+    }
+    return nullptr;
+}
+
 InferenceRunResult RunFullCpuInference(const QwenCausalLM& cpu_model,
                                        const RuntimeGenerationOptions& generation,
                                        const std::string& prepared_prompt,
@@ -602,7 +623,7 @@ InferenceRunResult RunFullCpuInference(const QwenCausalLM& cpu_model,
 InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
                                       soc::gpu::PipelineCache* pipeline_cache,
                                       soc::gpu::BufferArena* temporary_arena,
-                                      const soc::gpu::QwenCausalLM& gpu_model,
+                                      const soc::gpu::ModelRunner& gpu_model,
                                       const QwenCausalLM& cpu_model,
                                       const ExecutionPlan& plan,
                                       const RuntimeGenerationOptions& generation,
@@ -639,26 +660,35 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
         return run;
     }
     const soc::gpu::DeviceTensor prompt_hidden = CreateGpuFloatTensor(context,
-                                                                      {prompt_token_ids.size(), gpu_model.params().hidden_size},
+                                                                      {prompt_token_ids.size(), gpu_model.hidden_size()},
                                                                       "hybrid_prompt_hidden",
                                                                       error_message);
     if (!prompt_hidden.IsValid()) {
         return run;
     }
 
+    const auto* layer_range_runner = dynamic_cast<const soc::gpu::LayerRangeModelRunner*>(&gpu_model);
+    if (layer_range_runner == nullptr) {
+        if (error_message != nullptr) {
+            *error_message = "selected GPU model does not support layer-range execution";
+        }
+        return run;
+    }
+
     temporary_arena->Reset();
-    if (!gpu_model.ForwardHiddenCachedRange(context,
-                                            pipeline_cache,
-                                            prompt_tensor,
-                                            gpu_cache.get(),
-                                            prompt_hidden,
-                                            temporary_arena,
-                                            0,
-                                            0,
-                                            plan.resolved_gpu_layers,
-                                            false,
-                                            soc::gpu::RangeCommandStreamMode::kDefault,
-                                            error_message)) {
+    soc::gpu::LayerRangeExecutionOptions prompt_range_options;
+    prompt_range_options.position_offset = 0;
+    prompt_range_options.start_layer = 0;
+    prompt_range_options.end_layer = plan.resolved_gpu_layers;
+    prompt_range_options.apply_final_norm = false;
+    if (!layer_range_runner->ForwardHiddenCachedRange(context,
+                                                      pipeline_cache,
+                                                      prompt_tensor,
+                                                      gpu_cache.get(),
+                                                      prompt_hidden,
+                                                      temporary_arena,
+                                                      prompt_range_options,
+                                                      error_message)) {
         return run;
     }
 
@@ -687,8 +717,8 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
         if (!decode_tensor.IsValid()) {
             return run;
         }
-        const soc::gpu::DeviceTensor decode_hidden = CreateGpuFloatTensor(context,
-                                                                          {1, gpu_model.params().hidden_size},
+    const soc::gpu::DeviceTensor decode_hidden = CreateGpuFloatTensor(context,
+                                                                          {1, gpu_model.hidden_size()},
                                                                           "hybrid_decode_hidden",
                                                                           error_message);
         if (!decode_hidden.IsValid()) {
@@ -696,18 +726,19 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
         }
 
         temporary_arena->Reset();
-        if (!gpu_model.ForwardHiddenCachedRange(context,
-                                                pipeline_cache,
-                                                decode_tensor,
-                                                gpu_cache.get(),
-                                                decode_hidden,
-                                                temporary_arena,
-                                                running_token_ids.size() - 1,
-                                                0,
-                                                plan.resolved_gpu_layers,
-                                                false,
-                                                soc::gpu::RangeCommandStreamMode::kDefault,
-                                                error_message)) {
+        soc::gpu::LayerRangeExecutionOptions decode_range_options;
+        decode_range_options.position_offset = running_token_ids.size() - 1;
+        decode_range_options.start_layer = 0;
+        decode_range_options.end_layer = plan.resolved_gpu_layers;
+        decode_range_options.apply_final_norm = false;
+        if (!layer_range_runner->ForwardHiddenCachedRange(context,
+                                                          pipeline_cache,
+                                                          decode_tensor,
+                                                          gpu_cache.get(),
+                                                          decode_hidden,
+                                                          temporary_arena,
+                                                          decode_range_options,
+                                                          error_message)) {
             return run;
         }
 
@@ -916,7 +947,7 @@ void PrintVerboseSummary(const CliOptions& options,
         std::cerr << "decode_plan_blocker[" << blocker.stage_index << "] stage=" << blocker.stage_label
                   << " prior_stage_index=" << blocker.prior_stage_index
                   << " prior_stage=" << blocker.prior_stage_label
-                  << " buffer_kind=" << DecodePlanBufferKindName(blocker.buffer_kind)
+                  << " resource=" << blocker.resource_label
                   << " hazard_kind=" << DecodePlanHazardKindName(blocker.prior_write, blocker.current_write) << "\n";
     }
     for (const auto& entry : profile.entries) {
@@ -934,6 +965,12 @@ int main(int argc, char** argv) {
         const CliOptions options = ParseArgs(argc, argv);
         const std::string prompt_text = ResolvePromptText(options);
 
+        const soc::gpu::ManifestData gpu_manifest = soc::gpu::ManifestLoader::LoadFromFile(options.manifest_path);
+        std::string error_message;
+        soc::gpu::ModelSelection model_selection;
+        if (!soc::gpu::ResolveModelSelection(gpu_manifest, options.model_type, &model_selection, &error_message)) {
+            throw std::runtime_error(error_message);
+        }
         const ManifestData manifest = ManifestLoader::LoadFromFile(options.manifest_path);
         const ExecutionPlan plan = ResolveExecutionPlan(options, manifest);
         const TokenizerRuntimeData tokenizer_runtime = TokenizerRuntimeLoader::LoadFromFile(manifest.tokenizer_runtime_file);
@@ -944,8 +981,6 @@ int main(int argc, char** argv) {
         if ((!options.prompt_cache_artifact_save.empty() || !options.prompt_cache_artifact_load.empty()) && plan.mode != "full-gpu") {
             throw std::runtime_error("prompt cache artifacts are only supported in full-gpu mode");
         }
-
-        std::string error_message;
         auto context = soc::gpu::MetalContext::CreateDefault(options.metallib_path,
                                                              options.shader_source_path,
                                                              &error_message);
@@ -966,21 +1001,25 @@ int main(int argc, char** argv) {
 
         InferenceRunResult run;
         if (plan.mode == "full-cpu") {
+            if (!SupportsCpuReferenceModel(model_selection)) {
+                throw std::runtime_error("CPU reference path is not registered for model type " + model_selection.registry_name);
+            }
             const QwenCausalLM cpu_model = QwenModelLoader::LoadModel(manifest);
             run = RunFullCpuInference(cpu_model, generation, prepared_prompt, tokenizer_runtime);
         } else if (plan.mode == "hybrid") {
-            soc::gpu::QwenCausalLMWeights gpu_weights;
-            gpu_weights.tie_word_embeddings = true;
-            soc::gpu::QwenCausalLM gpu_model(std::move(gpu_weights), {});
-            if (!soc::gpu::QwenModelLoader::LoadModelFromFile(*context, options.manifest_path, &gpu_model, &error_message)) {
+            auto gpu_runner = CreateGpuRunnerForSelection(model_selection, *context, options.manifest_path, &error_message);
+            if (gpu_runner == nullptr) {
                 std::cerr << "failed to load GPU model: " << error_message << '\n';
                 return 1;
+            }
+            if (!SupportsCpuReferenceModel(model_selection)) {
+                throw std::runtime_error("CPU reference path is not registered for model type " + model_selection.registry_name);
             }
             const QwenCausalLM cpu_model = QwenModelLoader::LoadModel(manifest);
             run = RunHybridInference(*context,
                                      &pipeline_cache,
                                      temporary_arena.get(),
-                                     gpu_model,
+                                     *gpu_runner,
                                      cpu_model,
                                      plan,
                                      generation,
@@ -988,17 +1027,15 @@ int main(int argc, char** argv) {
                                      tokenizer_runtime,
                                      &error_message);
         } else {
-            soc::gpu::QwenCausalLMWeights gpu_weights;
-            gpu_weights.tie_word_embeddings = true;
-            soc::gpu::QwenCausalLM gpu_model(std::move(gpu_weights), {});
-            if (!soc::gpu::QwenModelLoader::LoadModelFromFile(*context, options.manifest_path, &gpu_model, &error_message)) {
+            auto gpu_runner = CreateGpuRunnerForSelection(model_selection, *context, options.manifest_path, &error_message);
+            if (gpu_runner == nullptr) {
                 std::cerr << "failed to load GPU model: " << error_message << '\n';
                 return 1;
             }
             run = RunFullGpuInference(*context,
                                       &pipeline_cache,
                                       temporary_arena.get(),
-                                      std::move(gpu_model),
+                                      std::move(gpu_runner),
                                       generation,
                                       prompt_token_ids,
                                       options.prompt_cache_artifact_save,

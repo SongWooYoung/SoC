@@ -15,6 +15,13 @@ namespace soc::gpu {
 class BufferArena;
 class MetalContext;
 
+enum class RangeCommandStreamMode {
+    kDefault,
+    kOff,
+    kLayer,
+    kFullRange,
+};
+
 struct QwenCausalLMWeights {
     DeviceTensor embed_tokens_weight;
     std::vector<QwenBlockWeights> blocks;
@@ -36,13 +43,6 @@ struct QwenCausalLMParams {
     std::size_t max_position_embeddings = 0;
     float rope_theta = 1000000.0f;
     float rms_norm_eps = 1.0e-6f;
-};
-
-enum class RangeCommandStreamMode {
-    kDefault,
-    kOff,
-    kLayer,
-    kFullRange,
 };
 
 class QwenCausalLM {

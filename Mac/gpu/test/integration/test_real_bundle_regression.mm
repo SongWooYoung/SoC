@@ -19,6 +19,7 @@
 #include "buffer/metal_buffer.h"
 #include "kernel/pipeline_cache.h"
 #include "metal/metal_context.h"
+#include "models/qwen3/qwen3_runner.h"
 #include "model/qwen_causal_lm.h"
 #include "model/qwen_model_loader.h"
 #include "runtime/command_scheduler.h"
@@ -271,7 +272,7 @@ bool CompareCpuAndGpuFirstToken(const RuntimeBundle& cpu_bundle,
                                 const std::vector<int>& prompt_token_ids,
                                 const soc::gpu::MetalContext& context,
                                 soc::gpu::PipelineCache* pipeline_cache,
-                                const soc::gpu::QwenCausalLM& gpu_model,
+                                const soc::gpu::ModelRunner& gpu_model,
                                 const soc::gpu::Sampler& gpu_sampler,
                                 const soc::gpu::CommandScheduler& scheduler,
                                 soc::gpu::BufferArena* temporary_arena,
@@ -368,7 +369,7 @@ bool RunGpuManualGeneration(const TokenizerRuntime& tokenizer,
                             const std::vector<int>& prompt_token_ids,
                             const soc::gpu::MetalContext& context,
                             soc::gpu::PipelineCache* pipeline_cache,
-                            const soc::gpu::QwenCausalLM& model,
+                            const soc::gpu::ModelRunner& model,
                             const soc::gpu::Sampler& sampler,
                             const soc::gpu::CommandScheduler& scheduler,
                             soc::gpu::BufferArena* temporary_arena,
@@ -542,7 +543,7 @@ bool RunGpuGenerationContext(const TokenizerRuntime& tokenizer,
                              const std::vector<int>& prompt_token_ids,
                              const soc::gpu::MetalContext& context,
                              soc::gpu::PipelineCache* pipeline_cache,
-                             const soc::gpu::QwenCausalLM& model,
+                             std::shared_ptr<soc::gpu::ModelRunner> model,
                              const soc::gpu::Sampler& sampler,
                              const soc::gpu::CommandScheduler& scheduler,
                              soc::gpu::BufferArena* temporary_arena,
@@ -570,7 +571,7 @@ bool RunGpuGenerationContext(const TokenizerRuntime& tokenizer,
     temporary_arena->Reset();
     temporary_arena->ClearTelemetry();
 
-    soc::gpu::GenerationContext generation_context(model,
+    soc::gpu::GenerationContext generation_context(std::move(model),
                                                    sampler,
                                                    scheduler,
                                                    ResolveSequenceCapacity(options, prompt_token_ids.size()));
@@ -609,7 +610,7 @@ bool RunGpuGenerationContextFromPromptCacheArtifact(const TokenizerRuntime& toke
                                                     const std::string& case_name,
                                                     const soc::gpu::MetalContext& context,
                                                     soc::gpu::PipelineCache* pipeline_cache,
-                                                    const soc::gpu::QwenCausalLM& model,
+                                                    std::shared_ptr<soc::gpu::ModelRunner> model,
                                                     const soc::gpu::Sampler& sampler,
                                                     const soc::gpu::CommandScheduler& scheduler,
                                                     soc::gpu::BufferArena* temporary_arena,
@@ -656,7 +657,7 @@ bool RunGpuGenerationContextFromPromptCacheArtifact(const TokenizerRuntime& toke
         }
     }
 
-    soc::gpu::GenerationContext cached_generation_context(model,
+    soc::gpu::GenerationContext cached_generation_context(std::move(model),
                                                           sampler,
                                                           scheduler,
                                                           ResolveSequenceCapacity(options, prompt_token_ids.size()));
@@ -997,6 +998,7 @@ int main() {
             std::cerr << "failed to load GPU model: " << error_message << '\n';
             return 1;
         }
+        const soc::gpu::models::qwen3::Qwen3Runner gpu_runner(gpu_model);
 
         const soc::gpu::Sampler gpu_sampler(BuildGpuSamplerConfig(options));
         const soc::gpu::CommandScheduler scheduler;
@@ -1025,7 +1027,7 @@ int main() {
                                             cpu_run.prompt_token_ids,
                                             *context,
                                             &pipeline_cache,
-                                            gpu_model,
+                                            gpu_runner,
                                             gpu_sampler,
                                             scheduler,
                                             temporary_arena.get(),
@@ -1067,7 +1069,7 @@ int main() {
                                         cpu_run.prompt_token_ids,
                                         *context,
                                         &pipeline_cache,
-                                        gpu_model,
+                                        gpu_runner,
                                         gpu_sampler,
                                         scheduler,
                                         temporary_arena.get(),
@@ -1086,7 +1088,7 @@ int main() {
                                          cpu_run.prompt_token_ids,
                                          *context,
                                          &pipeline_cache,
-                                         gpu_model,
+                                         std::make_shared<soc::gpu::models::qwen3::Qwen3Runner>(gpu_model),
                                          gpu_sampler,
                                          scheduler,
                                          temporary_arena.get(),
@@ -1106,7 +1108,7 @@ int main() {
                                                                 regression_case.name,
                                                                 *context,
                                                                 &pipeline_cache,
-                                                                gpu_model,
+                                                                std::make_shared<soc::gpu::models::qwen3::Qwen3Runner>(gpu_model),
                                                                 gpu_sampler,
                                                                 scheduler,
                                                                 temporary_arena.get(),

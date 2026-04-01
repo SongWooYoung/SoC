@@ -1,12 +1,13 @@
 CXX := clang++
 
-CXXFLAGS := -O2 -std=c++17 -Wall -Wextra -Wpedantic -MMD -MP -Iinclude -I../cpu
+CXXFLAGS := -O2 -std=c++17 -Wall -Wextra -Wpedantic -MMD -MP -I. -Iinclude -I../cpu
 OBJCXXFLAGS := $(CXXFLAGS) -fobjc-arc
 CPU_CXXFLAGS := $(CXXFLAGS) -I../cpu
 CPU_OBJCXXFLAGS := $(OBJCXXFLAGS) -I../cpu
 LDFLAGS := -framework Foundation -framework Metal
 
 SRC_DIR := src
+MODEL_DIR := models
 TEST_DIR := test
 SHADER_DIR := shaders
 BUILD_DIR := build
@@ -92,8 +93,8 @@ PYTHON_BIN ?= $(if $(wildcard ../../.venv/bin/python),$(abspath ../../.venv/bin/
 METAL := xcrun -sdk macosx metal
 METALLIB_TOOL := xcrun -sdk macosx metallib
 
-CPP_SRCS := $(wildcard $(SRC_DIR)/*.cpp) $(wildcard $(SRC_DIR)/*/*.cpp)
-MM_SRCS := $(wildcard $(SRC_DIR)/*.mm) $(wildcard $(SRC_DIR)/*/*.mm)
+CPP_SRCS := $(shell find $(SRC_DIR) $(MODEL_DIR) -type f -name '*.cpp' 2>/dev/null)
+MM_SRCS := $(shell find $(SRC_DIR) $(MODEL_DIR) -type f -name '*.mm' 2>/dev/null)
 CPU_CPP_SRCS := $(wildcard ../cpu/src/*.cpp)
 
 CPP_OBJS := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(CPP_SRCS))

@@ -492,6 +492,7 @@ int main() {
                                 mlp_params,
                                 arena.get(),
                                 nullptr,
+                                nullptr,
                                 &error_message)) {
         std::cerr << "QwenMLP failed: " << error_message << '\n';
         return 1;

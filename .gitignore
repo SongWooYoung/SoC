@@ -22,6 +22,8 @@ main
 **/main
 
 models/
+!Mac/gpu/models/
+!Mac/gpu/models/**
 
 .venv/
 **/.venv/

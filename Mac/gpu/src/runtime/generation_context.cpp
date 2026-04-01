@@ -9,6 +9,7 @@
 
 #include "buffer/buffer_arena.h"
 #include "buffer/metal_buffer.h"
+#include "runtime/kv_cache.h"
 #include "runtime/runtime_policy.h"
 
 namespace soc::gpu {
@@ -110,7 +111,7 @@ bool ReadBytes(std::ifstream* stream,
 
 }  // namespace
 
-GenerationContext::GenerationContext(QwenCausalLM model,
+GenerationContext::GenerationContext(std::shared_ptr<ModelRunner> model,
                                      Sampler sampler,
                                      CommandScheduler scheduler,
                                      std::size_t max_sequence_length,
@@ -120,6 +121,8 @@ GenerationContext::GenerationContext(QwenCausalLM model,
       scheduler_(std::move(scheduler)),
       max_sequence_length_(max_sequence_length),
       prefill_step_size_(ResolvePrefillStepSize(prefill_step_size)) {}
+
+GenerationContext::~GenerationContext() = default;
 
 bool GenerationContext::Prefill(const MetalContext& context,
                                 PipelineCache* pipeline_cache,
@@ -136,9 +139,9 @@ bool GenerationContext::Prefill(const MetalContext& context,
     prompt_token_ids_ = token_ids;
     running_token_ids_ = token_ids;
     kv_cache_ = KVCache::CreateShared(context,
-                                      model_.num_layers(),
-                                      model_.num_key_value_heads(),
-                                      model_.head_dim(),
+                                      model_->num_layers(),
+                                      model_->num_key_value_heads(),
+                                      model_->head_dim(),
                                       max_sequence_length_,
                                       "generation_kv_cache",
                                       error_message);
@@ -165,12 +168,12 @@ bool GenerationContext::Prefill(const MetalContext& context,
         }
 
         const DeviceTensor logits_tensor(logits_buffer_,
-                                         chunk_start * model_.vocab_size() * sizeof(float),
+                                         chunk_start * model_->vocab_size() * sizeof(float),
                                          TensorDesc::CreateContiguous(DataType::kFloat32,
-                                                                      {chunk_size, model_.vocab_size()}));
+                                                                      {chunk_size, model_->vocab_size()}));
         if (!scheduler_.RunPrefill(context,
                                    pipeline_cache,
-                                   model_,
+                                   *model_,
                                    token_tensor,
                                    kv_cache_.get(),
                                    logits_tensor,
@@ -226,10 +229,10 @@ bool GenerationContext::DecodeNextToken(const MetalContext& context,
     if (!UploadTokenIds(context, std::vector<int>{last_token_id}, &token_tensor, error_message)) {
         return false;
     }
-    const DeviceTensor logits_tensor(logits_buffer_, 0, TensorDesc::CreateContiguous(DataType::kFloat32, {1, model_.vocab_size()}));
+    const DeviceTensor logits_tensor(logits_buffer_, 0, TensorDesc::CreateContiguous(DataType::kFloat32, {1, model_->vocab_size()}));
     if (!scheduler_.RunDecode(context,
                               pipeline_cache,
-                              model_,
+                              *model_,
                               token_tensor,
                               kv_cache_.get(),
                               logits_tensor,
@@ -313,7 +316,7 @@ bool GenerationContext::GenerateFromLoadedPromptCache(const MetalContext& contex
     const DeviceTensor prefill_logits(logits_buffer_,
                                       0,
                                       TensorDesc::CreateContiguous(DataType::kFloat32,
-                                                                   {prompt_token_ids_.size(), model_.vocab_size()}));
+                                                                   {prompt_token_ids_.size(), model_->vocab_size()}));
     if (!sampler_.SampleFromLogits(context,
                                    pipeline_cache,
                                    prefill_logits,
@@ -367,7 +370,7 @@ bool GenerationContext::SavePromptCacheArtifact(const MetalContext& context,
         return false;
     }
 
-    const std::size_t logits_bytes = prompt_token_ids_.size() * model_.vocab_size() * sizeof(float);
+    const std::size_t logits_bytes = prompt_token_ids_.size() * model_->vocab_size() * sizeof(float);
     std::vector<std::uint8_t> logits_data(logits_bytes, 0);
     if (!logits_buffer_->Read(logits_data.data(), logits_data.size(), 0, error_message)) {
         return false;
@@ -395,7 +398,7 @@ bool GenerationContext::SavePromptCacheArtifact(const MetalContext& context,
 
     PromptCacheArtifactHeader header{};
     std::memcpy(header.magic, kPromptCacheArtifactMagic, sizeof(header.magic));
-    header.vocab_size = model_.vocab_size();
+    header.vocab_size = model_->vocab_size();
     header.prompt_token_count = prompt_token_ids_.size();
     header.logits_bytes = logits_data.size();
     header.layer_count = kv_state.layer_count;
@@ -438,8 +441,8 @@ bool GenerationContext::LoadPromptCacheArtifact(const MetalContext& context,
         }
         return false;
     }
-    if (header.vocab_size != model_.vocab_size() || header.layer_count != model_.num_layers() ||
-        header.key_value_head_count != model_.num_key_value_heads() || header.head_dim != model_.head_dim()) {
+    if (header.vocab_size != model_->vocab_size() || header.layer_count != model_->num_layers() ||
+        header.key_value_head_count != model_->num_key_value_heads() || header.head_dim != model_->head_dim()) {
         if (error_message != nullptr) {
             *error_message = "Prompt cache artifact does not match model configuration";
         }
@@ -500,7 +503,7 @@ void GenerationContext::Reset() {
 
 const std::vector<int>& GenerationContext::prompt_token_ids() const { return prompt_token_ids_; }
 const std::vector<int>& GenerationContext::running_token_ids() const { return running_token_ids_; }
-const QwenCausalLM& GenerationContext::model() const { return model_; }
+const ModelRunner& GenerationContext::model() const { return *model_; }
 const CommandScheduler& GenerationContext::scheduler() const { return scheduler_; }
 const RuntimePolicy& GenerationContext::runtime_policy() const { return runtime_policy_; }
 
@@ -511,7 +514,7 @@ void GenerationContext::EnsureRuntimePolicyResolved(const MetalContext& context)
 bool GenerationContext::EnsureLogitsBuffer(const MetalContext& context,
                                            std::size_t row_count,
                                            std::string* error_message) {
-    const std::size_t required_size = row_count * model_.vocab_size() * sizeof(float);
+    const std::size_t required_size = row_count * model_->vocab_size() * sizeof(float);
     if (logits_buffer_ != nullptr && logits_buffer_->GetSizeBytes() >= required_size) {
         return true;
     }

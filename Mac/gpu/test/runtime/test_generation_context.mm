@@ -10,6 +10,7 @@
 #include "buffer/metal_buffer.h"
 #include "kernel/pipeline_cache.h"
 #include "metal/metal_context.h"
+#include "models/qwen3/qwen3_runner.h"
 #include "model/qwen_causal_lm.h"
 #include "runtime/command_scheduler.h"
 #include "runtime/generation_context.h"
@@ -183,7 +184,7 @@ int main() {
         return 1;
     }
 
-    soc::gpu::GenerationContext generation_context(std::move(model),
+    soc::gpu::GenerationContext generation_context(std::make_shared<soc::gpu::models::qwen3::Qwen3Runner>(std::move(model)),
                                                    soc::gpu::Sampler({1.0f, 2}),
                                                    soc::gpu::CommandScheduler(),
                                                    8);
@@ -192,7 +193,7 @@ int main() {
         std::cerr << "failed to build stepped identity model: " << error_message << '\n';
         return 1;
     }
-    soc::gpu::GenerationContext stepped_generation_context(std::move(stepped_model),
+    soc::gpu::GenerationContext stepped_generation_context(std::make_shared<soc::gpu::models::qwen3::Qwen3Runner>(std::move(stepped_model)),
                                                            soc::gpu::Sampler({1.0f, 2}),
                                                            soc::gpu::CommandScheduler(),
                                                            8,
@@ -250,7 +251,7 @@ int main() {
     }
 
     soc::gpu::QwenCausalLM cached_model = BuildIdentityModel(*context, 1, &error_message);
-    soc::gpu::GenerationContext cached_generation_context(std::move(cached_model),
+    soc::gpu::GenerationContext cached_generation_context(std::make_shared<soc::gpu::models::qwen3::Qwen3Runner>(std::move(cached_model)),
                                                           soc::gpu::Sampler({1.0f, 2}),
                                                           soc::gpu::CommandScheduler(),
                                                           8);
@@ -269,7 +270,7 @@ int main() {
         return 1;
     }
     soc::gpu::QwenCausalLM loaded_model = BuildIdentityModel(*context, 1, &error_message);
-    soc::gpu::GenerationContext loaded_generation_context(std::move(loaded_model),
+    soc::gpu::GenerationContext loaded_generation_context(std::make_shared<soc::gpu::models::qwen3::Qwen3Runner>(std::move(loaded_model)),
                                                           soc::gpu::Sampler({1.0f, 2}),
                                                           soc::gpu::CommandScheduler(),
                                                           8);
@@ -303,6 +304,7 @@ int main() {
     std::filesystem::remove(artifact_path);
 
     soc::gpu::QwenCausalLM plan_model = BuildIdentityModel(*context, 2, &error_message);
+    soc::gpu::models::qwen3::Qwen3Runner plan_runner(plan_model);
     soc::gpu::CommandScheduler plan_scheduler;
     auto plan_kv_cache = soc::gpu::KVCache::CreateShared(*context,
                                                          plan_model.num_layers(),
@@ -334,7 +336,7 @@ int main() {
                                                     soc::gpu::TensorDesc::CreateContiguous(soc::gpu::DataType::kFloat32, {1, 4}));
     if (!plan_scheduler.RunPrefill(*context,
                                    &pipeline_cache,
-                                   plan_model,
+                                   plan_runner,
                                    plan_token_tensor,
                                    plan_kv_cache.get(),
                                    plan_logits_tensor,
@@ -347,7 +349,7 @@ int main() {
     setenv("SOC_GPU_ENABLE_EXPERIMENTAL_PREBUILT_DECODE_PLAN", "1", 1);
     if (!plan_scheduler.RunDecode(*context,
                                   &pipeline_cache,
-                                  plan_model,
+                                  plan_runner,
                                   plan_token_tensor,
                                   plan_kv_cache.get(),
                                   plan_logits_tensor,
@@ -359,7 +361,9 @@ int main() {
         return 1;
     }
     unsetenv("SOC_GPU_ENABLE_EXPERIMENTAL_PREBUILT_DECODE_PLAN");
-    const soc::gpu::DecodeExecutionPlan* decode_plan = plan_scheduler.decode_plan();
+    const auto* decode_planner =
+        dynamic_cast<const soc::gpu::models::qwen3::Qwen3DecodePlanner*>(plan_runner.GetDecodePlanner());
+    const auto* decode_plan = decode_planner == nullptr ? nullptr : decode_planner->decode_plan();
     if (decode_plan == nullptr || decode_plan->stages.size() != 3) {
         std::cerr << "unexpected decode plan stage count\n";
         return 1;
@@ -370,13 +374,13 @@ int main() {
         std::cerr << "decode plan access metadata missing\n";
         return 1;
     }
-    if (decode_plan->stages[0].accesses[2].buffer_kind != soc::gpu::DecodePlanBufferKind::kKvKeys ||
+    if (decode_plan->stages[0].accesses[2].buffer_kind != soc::gpu::models::qwen3::DecodePlanBufferKind::kKvKeys ||
         decode_plan->stages[0].accesses[2].byte_offset != token_row_bytes ||
         decode_plan->stages[1].accesses[2].byte_offset != layer_span_bytes + token_row_bytes) {
         std::cerr << "decode plan KV key access offsets are incorrect\n";
         return 1;
     }
-    if (decode_plan->stages[0].accesses[3].buffer_kind != soc::gpu::DecodePlanBufferKind::kKvValues ||
+    if (decode_plan->stages[0].accesses[3].buffer_kind != soc::gpu::models::qwen3::DecodePlanBufferKind::kKvValues ||
         decode_plan->stages[0].accesses[3].byte_offset != token_row_bytes ||
         decode_plan->stages[1].accesses[3].byte_offset != layer_span_bytes + token_row_bytes) {
         std::cerr << "decode plan KV value access offsets are incorrect\n";
@@ -407,10 +411,10 @@ int main() {
         decode_plan_stats.stage_blockers.size() != 2 ||
         decode_plan_stats.stage_blockers[0].stage_index != 1 ||
         decode_plan_stats.stage_blockers[0].prior_stage_index != 0 ||
-        decode_plan_stats.stage_blockers[0].buffer_kind != soc::gpu::DecodePlanBufferKind::kHiddenSlot1 ||
+        decode_plan_stats.stage_blockers[0].resource_label != "hidden_slot1" ||
         decode_plan_stats.stage_blockers[1].stage_index != 2 ||
         decode_plan_stats.stage_blockers[1].prior_stage_index != 1 ||
-        decode_plan_stats.stage_blockers[1].buffer_kind != soc::gpu::DecodePlanBufferKind::kHiddenSlot0) {
+        decode_plan_stats.stage_blockers[1].resource_label != "hidden_slot0") {
         std::cerr << "decode plan run stats are incorrect\n";
         return 1;
     }

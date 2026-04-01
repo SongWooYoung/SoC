@@ -5,8 +5,8 @@
 #include <string>
 #include <vector>
 
-#include "model/qwen_causal_lm.h"
 #include "runtime/command_scheduler.h"
+#include "runtime/model_runner.h"
 #include "runtime/runtime_policy.h"
 #include "runtime/sampler.h"
 
@@ -23,11 +23,12 @@ struct GenerationStepResult {
 
 class GenerationContext {
 public:
-    GenerationContext(QwenCausalLM model,
+    GenerationContext(std::shared_ptr<ModelRunner> model,
                       Sampler sampler,
                       CommandScheduler scheduler,
                       std::size_t max_sequence_length,
                       std::size_t prefill_step_size = 0);
+    ~GenerationContext();
 
     bool Prefill(const MetalContext& context,
                  PipelineCache* pipeline_cache,
@@ -69,7 +70,7 @@ public:
     void Reset();
     const std::vector<int>& prompt_token_ids() const;
     const std::vector<int>& running_token_ids() const;
-    const QwenCausalLM& model() const;
+    const ModelRunner& model() const;
     const CommandScheduler& scheduler() const;
     const RuntimePolicy& runtime_policy() const;
 
@@ -86,7 +87,7 @@ private:
                         DeviceTensor* token_tensor,
                         std::string* error_message);
 
-    QwenCausalLM model_;
+    std::shared_ptr<ModelRunner> model_;
     Sampler sampler_;
     CommandScheduler scheduler_;
     std::size_t max_sequence_length_ = 0;
