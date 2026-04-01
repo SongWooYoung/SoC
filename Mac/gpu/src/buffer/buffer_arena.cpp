@@ -36,7 +36,7 @@ std::unique_ptr<BufferArena> BufferArena::CreateShared(const MetalContext& conte
     auto buffer = MetalBuffer::CreateForTensorClass(context,
                                                     capacity_bytes,
                                                     label,
-                                                    TensorClass::kTemporary,
+                                                    TensorClass::kHostStaging,
                                                     error_message);
     if (buffer == nullptr) {
         return nullptr;

@@ -31,10 +31,10 @@ MetalBufferStorageMode ResolveStorageModeForTensorClass(const TensorClass tensor
     switch (tensor_class) {
         case TensorClass::kStaticWeight:
         case TensorClass::kKvCache:
+        case TensorClass::kGpuScratch:
             return MetalBufferStorageMode::kPrivate;
-        case TensorClass::kTemporary:
         case TensorClass::kTokenMetadata:
-        case TensorClass::kStaging:
+        case TensorClass::kHostStaging:
         case TensorClass::kUnknown:
             return MetalBufferStorageMode::kShared;
     }
@@ -173,7 +173,7 @@ std::shared_ptr<MetalBuffer> MetalBuffer::CreateInitializedForTensorClass(const 
                              size_bytes,
                              label + "_staging",
                              MetalBufferStorageMode::kShared,
-                             TensorClass::kStaging,
+                                             TensorClass::kHostStaging,
                              error_message);
         if (staging_buffer == nullptr ||
             !staging_buffer->Write(source, size_bytes, 0, error_message)) {

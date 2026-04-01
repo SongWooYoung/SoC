@@ -242,7 +242,7 @@ bool AffineQmmOp::Run(const MetalContext& context,
         id<MTLComputeCommandEncoder> encoder = nil;
         id<MTLCommandBuffer> command_buffer = nil;
         if (stream != nullptr) {
-            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->GetOrCreateComputeEncoder();
         } else {
             id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
             command_buffer = [command_queue commandBuffer];
@@ -274,9 +274,7 @@ bool AffineQmmOp::Run(const MetalContext& context,
                         1);
         [encoder dispatchThreadgroups:threadgroups_per_grid threadsPerThreadgroup:threadgroup_size];
 
-        if (stream != nullptr) {
-            stream->EndEncoder();
-        } else {
+        if (stream == nullptr) {
             [encoder endEncoding];
             const char* profile_label = params.profile_label == nullptr ? "AffineQmm" : params.profile_label;
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,

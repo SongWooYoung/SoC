@@ -518,7 +518,7 @@ bool GenerationContext::EnsureLogitsBuffer(const MetalContext& context,
     logits_buffer_ = MetalBuffer::CreateForTensorClass(context,
                                                        required_size,
                                                        "generation_logits",
-                                                       TensorClass::kTemporary,
+                                                       TensorClass::kTokenMetadata,
                                                        error_message);
     return logits_buffer_ != nullptr;
 }

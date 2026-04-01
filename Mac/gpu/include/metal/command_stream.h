@@ -52,6 +52,7 @@ public:
     /// The caller must call EndEncoder() after dispatching.
     /// This allows each Op to have its own encoder (pipeline state, buffer bindings).
     const void* BeginEncoder();
+    const void* GetOrCreateComputeEncoder();
 
     /// Create a new blit command encoder from the current command buffer.
     /// Used for KV cache copy operations. Must be paired with EndEncoder().

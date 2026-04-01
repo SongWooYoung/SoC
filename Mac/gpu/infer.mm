@@ -296,7 +296,7 @@ soc::gpu::DeviceTensor CreateGpuFloatTensor(const soc::gpu::MetalContext& contex
     auto buffer = soc::gpu::MetalBuffer::CreateForTensorClass(context,
                                                               element_count * sizeof(float),
                                                               label,
-                                                              soc::gpu::TensorClass::kTemporary,
+                                                              soc::gpu::TensorClass::kHostStaging,
                                                               error_message);
     if (buffer == nullptr) {
         return {};

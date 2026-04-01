@@ -399,7 +399,7 @@ bool MatMulOp::Run(const MetalContext& context,
         id<MTLComputeCommandEncoder> encoder = nil;
         id<MTLCommandBuffer> command_buffer = nil;
         if (stream != nullptr) {
-            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->BeginEncoder();
+            encoder = (__bridge id<MTLComputeCommandEncoder>)stream->GetOrCreateComputeEncoder();
         } else {
             id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)context.GetNativeCommandQueue();
             command_buffer = [command_queue commandBuffer];
@@ -441,9 +441,7 @@ bool MatMulOp::Run(const MetalContext& context,
             [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
         }
 
-        if (stream != nullptr) {
-            stream->EndEncoder();
-        } else {
+        if (stream == nullptr) {
             [encoder endEncoding];
             const std::string profile_label_storage = BuildMatMulProfileLabel(params, key, policy);
             if (!context.FinalizeCommandBuffer((__bridge const void*)command_buffer,

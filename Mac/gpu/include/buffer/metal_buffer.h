@@ -17,9 +17,9 @@ enum class TensorClass {
     kUnknown,
     kStaticWeight,
     kKvCache,
-    kTemporary,
+    kGpuScratch,
     kTokenMetadata,
-    kStaging,
+    kHostStaging,
 };
 
 class MetalBuffer {

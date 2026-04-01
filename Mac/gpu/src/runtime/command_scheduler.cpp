@@ -462,7 +462,7 @@ bool CommandScheduler::EnsureHiddenBuffer(const MetalContext& context,
     decode_hidden_buffers_[slot] = MetalBuffer::CreateForTensorClass(context,
                                                                      required_size,
                                                                      "decode_hidden_plan_slot",
-                                                                     TensorClass::kTemporary,
+                                                                     TensorClass::kGpuScratch,
                                                                      error_message);
     return decode_hidden_buffers_[slot] != nullptr;
 }

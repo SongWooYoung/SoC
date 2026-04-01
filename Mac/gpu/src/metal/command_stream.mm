@@ -50,6 +50,9 @@ const void* CommandStream::BeginEncoder() {
     if (!active_ || command_buffer_ == nullptr) {
         return nullptr;
     }
+    if (current_encoder_ != nullptr && !is_blit_encoder_) {
+        return current_encoder_;
+    }
     @autoreleasepool {
         id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)command_buffer_;
         id<MTLComputeCommandEncoder> encoder = [cb computeCommandEncoder];
@@ -62,9 +65,18 @@ const void* CommandStream::BeginEncoder() {
     }
 }
 
+const void* CommandStream::GetOrCreateComputeEncoder() {
+    return BeginEncoder();
+}
+
 const void* CommandStream::BeginBlitEncoder() {
     if (!active_ || command_buffer_ == nullptr) {
         return nullptr;
+    }
+    if (current_encoder_ != nullptr && !is_blit_encoder_) {
+        EndEncoder();
+    } else if (current_encoder_ != nullptr && is_blit_encoder_) {
+        return current_encoder_;
     }
     @autoreleasepool {
         id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)command_buffer_;

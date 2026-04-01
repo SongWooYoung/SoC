@@ -115,12 +115,27 @@ int main() {
                                                                     "token_policy_test",
                                                                     soc::gpu::TensorClass::kTokenMetadata,
                                                                     &error_message);
+    auto scratch_buffer = soc::gpu::MetalBuffer::CreateForTensorClass(*context,
+                                                                      sizeof(float) * 4,
+                                                                      "scratch_policy_test",
+                                                                      soc::gpu::TensorClass::kGpuScratch,
+                                                                      &error_message);
+    auto staging_buffer = soc::gpu::MetalBuffer::CreateForTensorClass(*context,
+                                                                      sizeof(float) * 4,
+                                                                      "staging_policy_test",
+                                                                      soc::gpu::TensorClass::kHostStaging,
+                                                                      &error_message);
     if (weight_buffer == nullptr || kv_buffer == nullptr || token_buffer == nullptr ||
+        scratch_buffer == nullptr || staging_buffer == nullptr ||
         weight_buffer->GetStorageMode() != soc::gpu::MetalBufferStorageMode::kPrivate ||
         kv_buffer->GetStorageMode() != soc::gpu::MetalBufferStorageMode::kPrivate ||
+        scratch_buffer->GetStorageMode() != soc::gpu::MetalBufferStorageMode::kPrivate ||
         token_buffer->GetStorageMode() != soc::gpu::MetalBufferStorageMode::kShared ||
+        staging_buffer->GetStorageMode() != soc::gpu::MetalBufferStorageMode::kShared ||
         weight_buffer->GetTensorClass() != soc::gpu::TensorClass::kStaticWeight ||
         kv_buffer->GetTensorClass() != soc::gpu::TensorClass::kKvCache ||
+        scratch_buffer->GetTensorClass() != soc::gpu::TensorClass::kGpuScratch ||
+        staging_buffer->GetTensorClass() != soc::gpu::TensorClass::kHostStaging ||
         token_buffer->GetTensorClass() != soc::gpu::TensorClass::kTokenMetadata) {
         std::cerr << "tensor residency policy mapping is incorrect\n";
         return 1;

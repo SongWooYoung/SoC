@@ -79,7 +79,7 @@ bool EnsureScratchBuffer(const MetalContext& context,
     *buffer = MetalBuffer::CreateForTensorClass(context,
                                                 size_bytes,
                                                 label,
-                                                TensorClass::kTemporary,
+                                                TensorClass::kGpuScratch,
                                                 error_message);
     return *buffer != nullptr;
 }
