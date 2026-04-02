@@ -10,9 +10,9 @@
 #include "buffer/metal_buffer.h"
 #include "kernel/pipeline_cache.h"
 #include "metal/metal_context.h"
-#include "module/qwen_attention.h"
-#include "module/qwen_block.h"
-#include "module/qwen_mlp.h"
+#include "models/qwen3/modules/qwen_attention.h"
+#include "models/qwen3/modules/qwen_block.h"
+#include "models/qwen3/modules/qwen_mlp.h"
 #include "runtime/kv_cache.h"
 #include "tensor/device_tensor.h"
 #include "tensor/tensor_desc.h"
@@ -603,6 +603,6 @@ int main() {
         return 1;
     }
 
-    std::cout << "test_qwen_modules passed\n";
+    std::cout << "test_qwen3_modules passed\n";
     return 0;
 }

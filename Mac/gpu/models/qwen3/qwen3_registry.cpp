@@ -3,7 +3,7 @@
 namespace soc::gpu::models::qwen3 {
 
 bool IsQwen3Manifest(const ManifestData& manifest) {
-    if (manifest.model_id.rfind("Qwen/", 0) == 0) {
+    if (manifest.model_id.rfind("Qwen/Qwen3-", 0) == 0) {
         return true;
     }
     if (manifest.config.is_object() &&

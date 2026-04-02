@@ -15,6 +15,12 @@ struct MetalProfilingEntry {
     std::size_t encoder_count = 0;
 };
 
+enum class MetalProfilingMode {
+    kOff,
+    kSummary,
+    kTrace,
+};
+
 struct MetalDeviceInfo {
     std::string name;
     bool is_apple_silicon_gpu = false;
@@ -45,6 +51,8 @@ public:
     const void* GetNativeDevice() const;
     const void* GetNativeCommandQueue() const;
     const void* GetNativeLibrary() const;
+    void SetProfilingMode(MetalProfilingMode mode) const;
+    MetalProfilingMode GetProfilingMode() const;
     void ResetProfiling() const;
     MetalProfilingSnapshot GetProfilingSnapshot() const;
     bool FinalizeCommandBuffer(const void* command_buffer_handle,

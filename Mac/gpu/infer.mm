@@ -25,6 +25,7 @@
 #include "runtime/generation_context.h"
 #include "runtime/layer_range_model_runner.h"
 #include "runtime/model_runner.h"
+#include "runtime/runtime_options.h"
 #include "runtime/runtime_policy.h"
 #include "runtime/sampler.h"
 
@@ -38,29 +39,6 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
-
-struct CliOptions {
-    std::string manifest_path = "../../models/cpp/qwen3-0.6b/manifest.json";
-    std::string model_type;
-    std::string metallib_path = "build/shaders/gpu.metallib";
-    std::string shader_source_path = "shaders/gpu_kernels.metal";
-    std::string prompt;
-    std::string prompt_file;
-    std::string output_file;
-    std::string prompt_cache_artifact_save;
-    std::string prompt_cache_artifact_load;
-    RuntimeGenerationOptions generation;
-    RuntimePromptOptions prompt_options;
-    std::size_t temporary_arena_bytes = 1ull << 26;
-    bool override_max_new_tokens = false;
-    bool override_temperature = false;
-    bool override_top_k = false;
-    bool override_eos_token_id = false;
-    bool override_max_sequence_length = false;
-    bool json_output = false;
-    int layer = -1;
-    bool verbose = false;
-};
 
 struct ExecutionPlan {
     int requested_layer = -1;
@@ -83,12 +61,37 @@ struct InferenceRunResult {
     soc::gpu::RuntimePolicy runtime_policy;
 };
 
+const char* ProfilingModeName(const soc::gpu::MetalProfilingMode mode) {
+    switch (mode) {
+        case soc::gpu::MetalProfilingMode::kOff:
+            return "off";
+        case soc::gpu::MetalProfilingMode::kSummary:
+            return "summary";
+        case soc::gpu::MetalProfilingMode::kTrace:
+            return "trace";
+    }
+    return "summary";
+}
+
+soc::gpu::MetalProfilingMode ParseProfilingMode(const std::string& value) {
+    if (value == "off") {
+        return soc::gpu::MetalProfilingMode::kOff;
+    }
+    if (value == "summary") {
+        return soc::gpu::MetalProfilingMode::kSummary;
+    }
+    if (value == "trace") {
+        return soc::gpu::MetalProfilingMode::kTrace;
+    }
+    throw std::runtime_error("unsupported profiling mode: " + value + " (expected off, summary, or trace)");
+}
+
 [[noreturn]] void PrintUsageAndExit(const char* executable, int exit_code) {
     std::cerr
         << "Usage: " << executable << " [--manifest <manifest.json>] (--prompt <text> | --prompt-file <path>) [options]\n"
         << "Options:\n"
         << "  --manifest <path>          Model manifest path (default: ../../models/cpp/qwen3-0.6b/manifest.json)\n"
-        << "  --model-type <name>        Override manifest-based model selection (currently: qwen3)\n"
+        << "  --model-type <name>        Override manifest-based model selection (currently: qwen3, qwen3_5)\n"
         << "  --prompt <text>            Prompt text to generate from\n"
         << "  --prompt-file <path>       Read prompt text from a UTF-8 text file ('-' reads stdin)\n"
         << "  --output-file <path>       Write the primary result payload to a file instead of stdout\n"
@@ -106,6 +109,7 @@ struct InferenceRunResult {
         << "  --system-prompt <text>     Override the default chat template system prompt\n"
         << "  --metallib <path>          Override compiled metallib path\n"
         << "  --shader-source <path>     Override Metal shader source path\n"
+        << "  --profiling <mode>         Metal profiling mode: off, summary, trace (default: summary)\n"
         << "  --temp-arena-bytes <n>     Temporary arena allocation size in bytes\n"
         << "  --verbose                  Print generation metadata to stderr\n"
         << "  --help, -h                 Show this help text\n";
@@ -127,8 +131,8 @@ std::string ReadTextFile(const std::string& path) {
     return buffer.str();
 }
 
-CliOptions ParseArgs(int argc, char** argv) {
-    CliOptions options;
+soc::gpu::InferCliOptions ParseArgs(int argc, char** argv) {
+    soc::gpu::InferCliOptions options;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -183,6 +187,8 @@ CliOptions ParseArgs(int argc, char** argv) {
             options.metallib_path = require_value("--metallib");
         } else if (argument == "--shader-source") {
             options.shader_source_path = require_value("--shader-source");
+        } else if (argument == "--profiling") {
+            options.profiling_mode = ParseProfilingMode(require_value("--profiling"));
         } else if (argument == "--temp-arena-bytes") {
             options.temporary_arena_bytes = static_cast<std::size_t>(std::stoull(require_value("--temp-arena-bytes")));
         } else if (argument == "--verbose") {
@@ -207,27 +213,7 @@ CliOptions ParseArgs(int argc, char** argv) {
     return options;
 }
 
-RuntimeGenerationOptions ResolveGenerationOptions(const CliOptions& cli, const ManifestData& manifest) {
-    RuntimeGenerationOptions resolved = RuntimePipeline::GenerationOptionsFromManifest(manifest);
-    if (cli.override_max_new_tokens) {
-        resolved.max_new_tokens = cli.generation.max_new_tokens;
-    }
-    if (cli.override_temperature) {
-        resolved.sampler.temperature = cli.generation.sampler.temperature;
-    }
-    if (cli.override_top_k) {
-        resolved.sampler.top_k = cli.generation.sampler.top_k;
-    }
-    if (cli.override_eos_token_id) {
-        resolved.eos_token_id = cli.generation.eos_token_id;
-    }
-    if (cli.override_max_sequence_length) {
-        resolved.max_sequence_length = cli.generation.max_sequence_length;
-    }
-    return resolved;
-}
-
-std::string ResolvePromptText(const CliOptions& options) {
+std::string ResolvePromptText(const soc::gpu::InferCliOptions& options) {
     if (!options.prompt.empty()) {
         return options.prompt;
     }
@@ -241,7 +227,7 @@ std::size_t ReadManifestLayerCount(const ManifestData& manifest) {
     return static_cast<std::size_t>(manifest.config.at("num_hidden_layers").as_int64());
 }
 
-ExecutionPlan ResolveExecutionPlan(const CliOptions& options, const ManifestData& manifest) {
+ExecutionPlan ResolveExecutionPlan(const soc::gpu::InferCliOptions& options, const ManifestData& manifest) {
     ExecutionPlan plan;
     plan.requested_layer = options.layer;
     plan.model_layer_count = ReadManifestLayerCount(manifest);
@@ -502,7 +488,7 @@ InferenceRunResult RunFullGpuInference(const soc::gpu::MetalContext& context,
                                        soc::gpu::PipelineCache* pipeline_cache,
                                        soc::gpu::BufferArena* temporary_arena,
                                        std::shared_ptr<soc::gpu::ModelRunner> gpu_model,
-                                       const RuntimeGenerationOptions& generation,
+                                       const soc::gpu::RuntimeGenerationOptions& generation,
                                        const std::vector<int>& prompt_token_ids,
                                        const std::string& prompt_cache_artifact_save,
                                        const std::string& prompt_cache_artifact_load,
@@ -591,6 +577,8 @@ std::shared_ptr<soc::gpu::ModelRunner> CreateGpuRunnerForSelection(const soc::gp
             }
             return std::make_shared<soc::gpu::models::qwen3::Qwen3Runner>(std::move(gpu_model));
         }
+        case soc::gpu::ModelArchitecture::kQwen3_5:
+            break;
         case soc::gpu::ModelArchitecture::kUnknown:
             break;
     }
@@ -602,7 +590,7 @@ std::shared_ptr<soc::gpu::ModelRunner> CreateGpuRunnerForSelection(const soc::gp
 }
 
 InferenceRunResult RunFullCpuInference(const QwenCausalLM& cpu_model,
-                                       const RuntimeGenerationOptions& generation,
+                                       const soc::gpu::RuntimeGenerationOptions& generation,
                                        const std::string& prepared_prompt,
                                        const TokenizerRuntimeData& tokenizer_runtime) {
     InferenceRunResult run;
@@ -610,7 +598,7 @@ InferenceRunResult RunFullCpuInference(const QwenCausalLM& cpu_model,
                                                                 TokenizerRuntime(tokenizer_runtime).Encode(prepared_prompt).size() + generation.max_new_tokens + 8);
     ::GenerationSession session(cpu_model,
                                 TokenizerRuntime(tokenizer_runtime),
-                                ::Sampler(generation.sampler),
+                                ::Sampler(soc::gpu::ToCpuSamplerConfig(generation.sampler)),
                                 sequence_capacity);
     const Clock::time_point start_time = Clock::now();
     const GenerationResult result = session.Generate(prepared_prompt, generation.max_new_tokens, generation.eos_token_id);
@@ -626,7 +614,7 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
                                       const soc::gpu::ModelRunner& gpu_model,
                                       const QwenCausalLM& cpu_model,
                                       const ExecutionPlan& plan,
-                                      const RuntimeGenerationOptions& generation,
+                                      const soc::gpu::RuntimeGenerationOptions& generation,
                                       const std::vector<int>& prompt_token_ids,
                                       const TokenizerRuntimeData& tokenizer_runtime,
                                       std::string* error_message) {
@@ -644,7 +632,7 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
         return run;
     }
     TensorKVCache cpu_cache(cpu_model.num_layers(), 1, cpu_model.num_key_value_heads(), cpu_model.head_dim(), sequence_capacity);
-    ::Sampler cpu_sampler(generation.sampler);
+    ::Sampler cpu_sampler(soc::gpu::ToCpuSamplerConfig(generation.sampler));
 
     const Clock::time_point start_time = Clock::now();
     context.ResetProfiling();
@@ -762,7 +750,7 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
     return run;
 }
 
-std::string BuildPrimaryOutput(const CliOptions& options,
+std::string BuildPrimaryOutput(const soc::gpu::InferCliOptions& options,
                                const ExecutionPlan& plan,
                                const std::string& prompt_text,
                                const std::string& prepared_prompt,
@@ -778,7 +766,8 @@ std::string BuildPrimaryOutput(const CliOptions& options,
                                double gpu_ms,
                                const soc::gpu::MetalProfilingSnapshot& profile,
                                const soc::gpu::DecodePlanRunStats& decode_plan_stats,
-                               const soc::gpu::RuntimePolicy& runtime_policy) {
+                               const soc::gpu::RuntimePolicy& runtime_policy,
+                               const soc::gpu::MetalProfilingMode profiling_mode) {
     if (!options.json_output) {
         return generated_text + "\n";
     }
@@ -827,6 +816,9 @@ std::string BuildPrimaryOutput(const CliOptions& options,
     stream << "    \"working_set_budget_bytes\": " << runtime_policy.working_set_budget_bytes << ",\n";
     stream << "    \"recommended_max_working_set_size\": " << runtime_policy.recommended_max_working_set_size << "\n";
     stream << "  },\n";
+    stream << "  \"profiling\": {\n";
+    stream << "    \"mode\": \"" << ProfilingModeName(profiling_mode) << "\"\n";
+    stream << "  },\n";
     stream << "  \"timing\": {\n";
     stream << "    \"prefill_ms\": " << prefill_ms << ",\n";
     stream << "    \"decode_ms\": " << decode_ms << ",\n";
@@ -862,7 +854,7 @@ std::string BuildPrimaryOutput(const CliOptions& options,
     return stream.str();
 }
 
-void WritePrimaryOutput(const CliOptions& options, const std::string& payload) {
+void WritePrimaryOutput(const soc::gpu::InferCliOptions& options, const std::string& payload) {
     if (options.output_file.empty()) {
         std::cout << payload;
         return;
@@ -884,7 +876,7 @@ void WritePrimaryOutput(const CliOptions& options, const std::string& payload) {
     output << payload;
 }
 
-void PrintVerboseSummary(const CliOptions& options,
+void PrintVerboseSummary(const soc::gpu::InferCliOptions& options,
                          const ExecutionPlan& plan,
                          const std::string& prepared_prompt,
                          const std::string& prompt_text,
@@ -897,9 +889,10 @@ void PrintVerboseSummary(const CliOptions& options,
                          const soc::gpu::MetalDeviceInfo& device_info,
                          double wall_ms,
                          double gpu_ms,
-                            const soc::gpu::MetalProfilingSnapshot& profile,
-                            const soc::gpu::DecodePlanRunStats& decode_plan_stats,
-                            const soc::gpu::RuntimePolicy& runtime_policy) {
+                         const soc::gpu::MetalProfilingSnapshot& profile,
+                         const soc::gpu::DecodePlanRunStats& decode_plan_stats,
+                         const soc::gpu::RuntimePolicy& runtime_policy,
+                         const soc::gpu::MetalProfilingMode profiling_mode) {
     std::cerr << "manifest=" << options.manifest_path << "\n";
     if (!options.prompt_file.empty()) {
         std::cerr << "prompt_file=" << options.prompt_file << "\n";
@@ -916,6 +909,7 @@ void PrintVerboseSummary(const CliOptions& options,
     std::cerr << "runtime_policy_prefill_step_size=" << runtime_policy.prefill_step_size << "\n";
     std::cerr << "runtime_policy_command_stream_encoder_budget=" << runtime_policy.command_stream_encoder_budget << "\n";
     std::cerr << "runtime_policy_working_set_budget_bytes=" << runtime_policy.working_set_budget_bytes << "\n";
+    std::cerr << "profiling_mode=" << ProfilingModeName(profiling_mode) << "\n";
     std::cerr << "max_new_tokens=" << generated_token_ids.size() << "\n";
     if (prepared_prompt != prompt_text) {
         std::cerr << "serialized_prompt=" << prepared_prompt << "\n";
@@ -962,7 +956,7 @@ void PrintVerboseSummary(const CliOptions& options,
 
 int main(int argc, char** argv) {
     try {
-        const CliOptions options = ParseArgs(argc, argv);
+        const soc::gpu::InferCliOptions options = ParseArgs(argc, argv);
         const std::string prompt_text = ResolvePromptText(options);
 
         const soc::gpu::ManifestData gpu_manifest = soc::gpu::ManifestLoader::LoadFromFile(options.manifest_path);
@@ -974,8 +968,8 @@ int main(int argc, char** argv) {
         const ManifestData manifest = ManifestLoader::LoadFromFile(options.manifest_path);
         const ExecutionPlan plan = ResolveExecutionPlan(options, manifest);
         const TokenizerRuntimeData tokenizer_runtime = TokenizerRuntimeLoader::LoadFromFile(manifest.tokenizer_runtime_file);
-        const RuntimeGenerationOptions generation = ResolveGenerationOptions(options, manifest);
-        const std::string prepared_prompt = RuntimePipeline::PreparePrompt(tokenizer_runtime, prompt_text, options.prompt_options);
+        const soc::gpu::RuntimeGenerationOptions generation = soc::gpu::ResolveGenerationOptions(options, manifest);
+        const std::string prepared_prompt = RuntimePipeline::PreparePrompt(tokenizer_runtime, prompt_text, soc::gpu::ToCpuRuntimePromptOptions(options.prompt_options));
         const TokenizerRuntime tokenizer(tokenizer_runtime);
         const std::vector<int> prompt_token_ids = tokenizer.Encode(prepared_prompt);
         if ((!options.prompt_cache_artifact_save.empty() || !options.prompt_cache_artifact_load.empty()) && plan.mode != "full-gpu") {
@@ -988,6 +982,7 @@ int main(int argc, char** argv) {
             std::cerr << "failed to create Metal context: " << error_message << '\n';
             return 1;
         }
+        context->SetProfilingMode(options.profiling_mode);
 
         soc::gpu::PipelineCache pipeline_cache(*context);
         auto temporary_arena = soc::gpu::BufferArena::CreateShared(*context,
@@ -1063,8 +1058,9 @@ int main(int argc, char** argv) {
                                                        run.wall_ms,
                                                        run.gpu_ms,
                                                        run.profile,
-                                                      run.decode_plan_stats,
-                                                      run.runtime_policy);
+                                                       run.decode_plan_stats,
+                                                       run.runtime_policy,
+                                                       options.profiling_mode);
         WritePrimaryOutput(options, payload);
 
         if (options.verbose) {
@@ -1083,7 +1079,8 @@ int main(int argc, char** argv) {
                                 run.gpu_ms,
                                 run.profile,
                                 run.decode_plan_stats,
-                                run.runtime_policy);
+                                run.runtime_policy,
+                                options.profiling_mode);
         }
         return 0;
     } catch (const std::exception& error) {

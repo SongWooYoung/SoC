@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
-#include "module/qwen_attention.h"
+#include "models/qwen3/modules/qwen_attention.h"
 
 #include <cmath>
 

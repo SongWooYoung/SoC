@@ -82,6 +82,14 @@ bool DeviceSupportsSIMDGroupMatrix(id<MTLDevice> device) {
     return false;
 }
 
+bool ProfilingEnabled(const MetalProfilingMode mode) {
+    return mode != MetalProfilingMode::kOff;
+}
+
+bool ProfilingNeedsEntries(const MetalProfilingMode mode) {
+    return mode == MetalProfilingMode::kTrace;
+}
+
 MetalProfilingEntry* FindProfilingEntry(std::vector<MetalProfilingEntry>* entries, const std::string& label) {
     for (auto& entry : *entries) {
         if (entry.label == label) {
@@ -107,6 +115,7 @@ struct MetalContext::Impl {
     id<MTLComputePipelineState> bootstrap_pipeline = nil;
     MetalDeviceInfo device_info;
     mutable std::mutex profiling_mutex;
+    mutable MetalProfilingMode profiling_mode = MetalProfilingMode::kSummary;
     mutable MetalProfilingSnapshot profiling_snapshot;
     mutable std::vector<PendingCommandBuffer> pending_command_buffers;
 };
@@ -209,6 +218,17 @@ const void* MetalContext::GetNativeLibrary() const {
     return (__bridge const void*)impl_->library;
 }
 
+void MetalContext::SetProfilingMode(MetalProfilingMode mode) const {
+    std::lock_guard<std::mutex> lock(impl_->profiling_mutex);
+    impl_->profiling_mode = mode;
+    impl_->profiling_snapshot = {};
+}
+
+MetalProfilingMode MetalContext::GetProfilingMode() const {
+    std::lock_guard<std::mutex> lock(impl_->profiling_mutex);
+    return impl_->profiling_mode;
+}
+
 void MetalContext::ResetProfiling() const {
     std::lock_guard<std::mutex> lock(impl_->profiling_mutex);
     impl_->profiling_snapshot = {};
@@ -253,21 +273,28 @@ bool MetalContext::FinalizeCommandBuffer(const void* command_buffer_handle,
         }
 
         std::lock_guard<std::mutex> lock(impl_->profiling_mutex);
-        impl_->profiling_snapshot.gpu_ms += gpu_ms;
-        impl_->profiling_snapshot.wait_ms += wait_ms;
-        impl_->profiling_snapshot.command_buffer_count += 1;
-        impl_->profiling_snapshot.encoder_count += encoder_count;
-        const std::string label = profile_label != nullptr && profile_label[0] != '\0'
-            ? std::string(profile_label)
-            : error_prefix;
-        MetalProfilingEntry* entry = FindProfilingEntry(&impl_->profiling_snapshot.entries, label);
-        if (entry == nullptr) {
-            impl_->profiling_snapshot.entries.push_back(MetalProfilingEntry{label, gpu_ms, wait_ms, 1, encoder_count});
-        } else {
-            entry->gpu_ms += gpu_ms;
-            entry->wait_ms += wait_ms;
-            entry->command_buffer_count += 1;
-            entry->encoder_count += encoder_count;
+        if (ProfilingEnabled(impl_->profiling_mode)) {
+            impl_->profiling_snapshot.gpu_ms += gpu_ms;
+            impl_->profiling_snapshot.wait_ms += wait_ms;
+            impl_->profiling_snapshot.command_buffer_count += 1;
+            impl_->profiling_snapshot.encoder_count += encoder_count;
+            if (ProfilingNeedsEntries(impl_->profiling_mode)) {
+                const std::string label = profile_label != nullptr && profile_label[0] != '\0'
+                    ? std::string(profile_label)
+                    : error_prefix;
+                MetalProfilingEntry* entry = FindProfilingEntry(&impl_->profiling_snapshot.entries, label);
+                if (entry == nullptr) {
+                    impl_->profiling_snapshot.entries.push_back(
+                        MetalProfilingEntry{label, gpu_ms, wait_ms, 1, encoder_count});
+                } else {
+                    entry->gpu_ms += gpu_ms;
+                    entry->wait_ms += wait_ms;
+                    entry->command_buffer_count += 1;
+                    entry->encoder_count += encoder_count;
+                }
+            } else {
+                impl_->profiling_snapshot.entries.clear();
+            }
         }
         return true;
     }
@@ -328,19 +355,25 @@ bool MetalContext::DrainPendingCommandBuffers(std::string* error_message) const 
             }
 
             std::lock_guard<std::mutex> lock(impl_->profiling_mutex);
-            impl_->profiling_snapshot.gpu_ms += gpu_ms;
-            impl_->profiling_snapshot.wait_ms += wait_ms;
-            impl_->profiling_snapshot.command_buffer_count += 1;
-            impl_->profiling_snapshot.encoder_count += pending_cb.encoder_count;
-            MetalProfilingEntry* entry = FindProfilingEntry(&impl_->profiling_snapshot.entries, pending_cb.profile_label);
-            if (entry == nullptr) {
-                impl_->profiling_snapshot.entries.push_back(
-                    MetalProfilingEntry{pending_cb.profile_label, gpu_ms, wait_ms, 1, pending_cb.encoder_count});
-            } else {
-                entry->gpu_ms += gpu_ms;
-                entry->wait_ms += wait_ms;
-                entry->command_buffer_count += 1;
-                entry->encoder_count += pending_cb.encoder_count;
+            if (ProfilingEnabled(impl_->profiling_mode)) {
+                impl_->profiling_snapshot.gpu_ms += gpu_ms;
+                impl_->profiling_snapshot.wait_ms += wait_ms;
+                impl_->profiling_snapshot.command_buffer_count += 1;
+                impl_->profiling_snapshot.encoder_count += pending_cb.encoder_count;
+                if (ProfilingNeedsEntries(impl_->profiling_mode)) {
+                    MetalProfilingEntry* entry = FindProfilingEntry(&impl_->profiling_snapshot.entries, pending_cb.profile_label);
+                    if (entry == nullptr) {
+                        impl_->profiling_snapshot.entries.push_back(
+                            MetalProfilingEntry{pending_cb.profile_label, gpu_ms, wait_ms, 1, pending_cb.encoder_count});
+                    } else {
+                        entry->gpu_ms += gpu_ms;
+                        entry->wait_ms += wait_ms;
+                        entry->command_buffer_count += 1;
+                        entry->encoder_count += pending_cb.encoder_count;
+                    }
+                } else {
+                    impl_->profiling_snapshot.entries.clear();
+                }
             }
         }
     }

@@ -1,4 +1,4 @@
-#include "module/qwen_block.h"
+#include "models/qwen3/modules/qwen_block.h"
 
 #include <cstdlib>
 #include <mutex>

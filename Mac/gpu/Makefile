@@ -26,7 +26,7 @@ RMSNORM_TEST_TARGET := test_rms_norm
 LINEAR_TEST_TARGET := test_linear
 ASSET_TEST_TARGET := test_asset_loader
 PHASE3_TEST_TARGET := test_phase3_kernels
-MODULE_TEST_TARGET := test_qwen_modules
+MODULE_TEST_TARGET := test_qwen3_modules
 RUNTIME_TEST_TARGET := test_generation_context
 INTEGRATION_TEST_TARGET := test_real_bundle_regression
 MATMUL_BENCH_TARGET := bench_matmul
@@ -93,8 +93,8 @@ PYTHON_BIN ?= $(if $(wildcard ../../.venv/bin/python),$(abspath ../../.venv/bin/
 METAL := xcrun -sdk macosx metal
 METALLIB_TOOL := xcrun -sdk macosx metallib
 
-CPP_SRCS := $(shell find $(SRC_DIR) $(MODEL_DIR) -type f -name '*.cpp' 2>/dev/null)
-MM_SRCS := $(shell find $(SRC_DIR) $(MODEL_DIR) -type f -name '*.mm' 2>/dev/null)
+CPP_SRCS := $(shell find $(SRC_DIR) $(MODEL_DIR) \( -path '$(MODEL_DIR)/*/test/*' -o -path '$(MODEL_DIR)/*/test' \) -prune -o -type f -name '*.cpp' -print 2>/dev/null)
+MM_SRCS := $(shell find $(SRC_DIR) $(MODEL_DIR) \( -path '$(MODEL_DIR)/*/test/*' -o -path '$(MODEL_DIR)/*/test' \) -prune -o -type f -name '*.mm' -print 2>/dev/null)
 CPU_CPP_SRCS := $(wildcard ../cpu/src/*.cpp)
 
 CPP_OBJS := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(CPP_SRCS))
@@ -107,7 +107,7 @@ RMSNORM_TEST_OBJ := $(OBJ_DIR)/test/kernel/test_rms_norm.o
 LINEAR_TEST_OBJ := $(OBJ_DIR)/test/kernel/test_linear.o
 ASSET_TEST_OBJ := $(OBJ_DIR)/test/asset/test_asset_loader.o
 PHASE3_TEST_OBJ := $(OBJ_DIR)/test/kernel/test_phase3_kernels.o
-MODULE_TEST_OBJ := $(OBJ_DIR)/test/module/test_qwen_modules.o
+MODULE_TEST_OBJ := $(OBJ_DIR)/models/qwen3/test/test_qwen3_modules.o
 RUNTIME_TEST_OBJ := $(OBJ_DIR)/test/runtime/test_generation_context.o
 INTEGRATION_TEST_OBJ := $(OBJ_DIR)/test/integration/test_real_bundle_regression.o
 MATMUL_BENCH_OBJ := $(OBJ_DIR)/benchmark/bench_matmul.o
@@ -369,33 +369,33 @@ $(INFER_BIN): $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(INFER_OBJ)
 	@mkdir -p $(BIN_DIR)
 	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(INFER_OBJ) -o $@ $(LDFLAGS)
 
-$(BOOTSTRAP_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(BOOTSTRAP_TEST_OBJ)
+$(BOOTSTRAP_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(BOOTSTRAP_TEST_OBJ)
 	@mkdir -p $(BIN_DIR)
-	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(BOOTSTRAP_TEST_OBJ) -o $@ $(LDFLAGS)
+	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(BOOTSTRAP_TEST_OBJ) -o $@ $(LDFLAGS)
 
-$(RMSNORM_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(RMSNORM_TEST_OBJ)
+$(RMSNORM_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(RMSNORM_TEST_OBJ)
 	@mkdir -p $(BIN_DIR)
-	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(RMSNORM_TEST_OBJ) -o $@ $(LDFLAGS)
+	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(RMSNORM_TEST_OBJ) -o $@ $(LDFLAGS)
 
-$(LINEAR_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(LINEAR_TEST_OBJ)
+$(LINEAR_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(LINEAR_TEST_OBJ)
 	@mkdir -p $(BIN_DIR)
-	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(LINEAR_TEST_OBJ) -o $@ $(LDFLAGS)
+	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(LINEAR_TEST_OBJ) -o $@ $(LDFLAGS)
 
-$(ASSET_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(ASSET_TEST_OBJ)
+$(ASSET_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(ASSET_TEST_OBJ)
 	@mkdir -p $(BIN_DIR)
-	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(ASSET_TEST_OBJ) -o $@ $(LDFLAGS)
+	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(ASSET_TEST_OBJ) -o $@ $(LDFLAGS)
 
-$(PHASE3_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(PHASE3_TEST_OBJ)
+$(PHASE3_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(PHASE3_TEST_OBJ)
 	@mkdir -p $(BIN_DIR)
-	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(PHASE3_TEST_OBJ) -o $@ $(LDFLAGS)
+	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(PHASE3_TEST_OBJ) -o $@ $(LDFLAGS)
 
-$(MODULE_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(MODULE_TEST_OBJ)
+$(MODULE_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(MODULE_TEST_OBJ)
 	@mkdir -p $(BIN_DIR)
-	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(MODULE_TEST_OBJ) -o $@ $(LDFLAGS)
+	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(MODULE_TEST_OBJ) -o $@ $(LDFLAGS)
 
-$(RUNTIME_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(RUNTIME_TEST_OBJ)
+$(RUNTIME_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(RUNTIME_TEST_OBJ)
 	@mkdir -p $(BIN_DIR)
-	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(RUNTIME_TEST_OBJ) -o $@ $(LDFLAGS)
+	$(CXX) $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(RUNTIME_TEST_OBJ) -o $@ $(LDFLAGS)
 
 $(INTEGRATION_TEST_BIN): $(CPP_OBJS) $(MM_OBJS) $(CPU_CPP_OBJS) $(INTEGRATION_TEST_OBJ)
 	@mkdir -p $(BIN_DIR)

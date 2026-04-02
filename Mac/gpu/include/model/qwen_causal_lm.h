@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "module/qwen_block.h"
+#include "models/qwen3/modules/qwen_block.h"
 #include "op/affine_qmm_op.h"
 #include "runtime/kv_cache.h"
 #include "tensor/device_tensor.h"

@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
-#include "module/qwen_mlp.h"
+#include "models/qwen3/modules/qwen_mlp.h"
 
 #include <cstdlib>
 #include <string>

@@ -9,6 +9,7 @@ namespace soc::gpu {
 enum class ModelArchitecture {
     kUnknown,
     kQwen3,
+    kQwen3_5,
 };
 
 struct ModelSelection {
