@@ -5,30 +5,30 @@
 현재 GPU real-bundle regression 결과는 아래 두 위치에 저장했다.
 
 1. Runtime-generated report
-   `Mac/gpu/build/reports/test_real_bundle_regression_report.md`
+   `Mac/gpu/reports/test_real_bundle_regression_report.md`
 
 2. Repo-stable summary
    `Mac/gpu/plan/09_TEST_RESULTS.md`
 
 3. Prompt sweep summary
-   `Mac/gpu/build/reports/test_real_bundle_sweep_summary.md`
+   `Mac/gpu/reports/test_real_bundle_sweep_summary.md`
 
 4. Prompt sweep per-case reports
-   `Mac/gpu/build/reports/sweep_cases/*.md`
+   `Mac/gpu/reports/sweep_cases/*.md`
 
 5. Quick regression report
-   `Mac/gpu/build/reports/quick/test_real_bundle_regression_report.md`
+   `Mac/gpu/reports/quick/test_real_bundle_regression_report.md`
 
 6. Quick sweep summary
-   `Mac/gpu/build/reports/quick/test_real_bundle_sweep_summary.md`
+   `Mac/gpu/reports/quick/test_real_bundle_sweep_summary.md`
 
 7. Quick sweep per-case reports
-   `Mac/gpu/build/reports/quick/sweep_cases/*.md`
+   `Mac/gpu/reports/quick/sweep_cases/*.md`
 
 정리하면:
 
-1. `build/reports/...`는 test 실행 결과 artifact다.
-2. `build/reports/quick/...`는 smoke/quick validation artifact다.
+1. `reports/...`는 test 실행 결과 artifact다.
+2. `reports/quick/...`는 smoke/quick validation artifact다.
 3. `plan/09_TEST_RESULTS.md`는 지금 확인된 결과와 재현 경로를 고정해서 보는 문서다.
 
 ## What Was Verified
@@ -135,9 +135,9 @@
 
 ## Recommended Reading Order
 
-1. 실행 결과 원문: `Mac/gpu/build/reports/test_real_bundle_regression_report.md`
+1. 실행 결과 원문: `Mac/gpu/reports/test_real_bundle_regression_report.md`
 2. baseline 해석: `Mac/gpu/plan/08_REAL_BUNDLE_BASELINE.md`
-3. sweep summary: `Mac/gpu/build/reports/test_real_bundle_sweep_summary.md`
+3. sweep summary: `Mac/gpu/reports/test_real_bundle_sweep_summary.md`
 4. 현재 저장 위치와 자동화 경로: `Mac/gpu/plan/09_TEST_RESULTS.md`
 
 ## Artifact Separation
@@ -145,6 +145,6 @@
 quick target과 full target은 이제 서로 다른 artifact를 쓴다.
 
 1. `make regression-gpu`는 full regression artifact를 갱신한다.
-2. `make regression-gpu-quick`는 `build/reports/quick/...`만 갱신한다.
+2. `make regression-gpu-quick`는 `reports/quick/...`만 갱신한다.
 3. `make gpu-sweep`는 full sweep artifact를 갱신한다.
-4. `make gpu-sweep-quick`는 `build/reports/quick/...`만 갱신한다.
+4. `make gpu-sweep-quick`는 `reports/quick/...`만 갱신한다.

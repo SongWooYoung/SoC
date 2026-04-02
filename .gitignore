@@ -25,5 +25,7 @@ models/
 !Mac/gpu/models/
 !Mac/gpu/models/**
 
+Mac/gpu/reports/
+
 .venv/
 **/.venv/

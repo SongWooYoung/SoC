@@ -173,8 +173,8 @@ batching은 계속 실험하되, `안전한 op 묶음`과 `hazard 추적` 없이
 
 비교 기준:
 
-- baseline: [`build/reports/quick/labeled_breakdown.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/quick/labeled_breakdown.json)
-- vec4 path: [`build/reports/quick/labeled_breakdown_vec4.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/quick/labeled_breakdown_vec4.json)
+- baseline: [`reports/quick/labeled_breakdown.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/quick/labeled_breakdown.json)
+- vec4 path: [`reports/quick/labeled_breakdown_vec4.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/quick/labeled_breakdown_vec4.json)
 
 핵심 변화:
 
@@ -195,7 +195,7 @@ batching은 계속 실험하되, `안전한 op 묶음`과 `hazard 추적` 없이
 
 ### short full benchmark 결과
 
-- artifact: [`build/reports/full_gpu_vs_pytorch/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/full_gpu_vs_pytorch/summary.json)
+- artifact: [`reports/full_gpu_vs_pytorch/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/full_gpu_vs_pytorch/summary.json)
 - 조건: `max_new_tokens=32`, `gpu_runs=1`, `pytorch_runs=1`, `dtype=float16`
 - C++ full GPU: `5.30 tok/s`
 - PyTorch MPS fp16 decode: `46.7 tok/s`
@@ -311,13 +311,13 @@ batching은 계속 실험하되, `안전한 op 묶음`과 `hazard 추적` 없이
 ### 실기기 결과
 
 - quick 8-token:
-  - baseline vec4: [`build/reports/quick/labeled_breakdown_vec4.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/quick/labeled_breakdown_vec4.json)
-  - q4 decode: [`build/reports/quick/q4_decode_8tok.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/quick/q4_decode_8tok.json)
+  - baseline vec4: [`reports/quick/labeled_breakdown_vec4.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/quick/labeled_breakdown_vec4.json)
+  - q4 decode: [`reports/quick/q4_decode_8tok.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/quick/q4_decode_8tok.json)
   - total `gpu_ms`: `424.887 -> 255.584`
   - total `wall_ms`: `1508.46 -> 984.534`
 - full benchmark 32-token:
-  - dense baseline: [`build/reports/full_gpu_vs_pytorch/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/full_gpu_vs_pytorch/summary.json)
-  - q4 decode: [`build/reports/full_gpu_vs_pytorch_q4_decode/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_decode/summary.json)
+  - dense baseline: [`reports/full_gpu_vs_pytorch/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/full_gpu_vs_pytorch/summary.json)
+  - q4 decode: [`reports/full_gpu_vs_pytorch_q4_decode/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/full_gpu_vs_pytorch_q4_decode/summary.json)
   - C++ full GPU: `6.12 -> 9.65 tok/s`
   - PyTorch MPS fp16: `52.86 tok/s`
 
@@ -352,14 +352,14 @@ batching은 계속 실험하되, `안전한 op 묶음`과 `hazard 추적` 없이
 ### 실측
 
 - quick 8-token:
-  - q4 decode only: [`build/reports/quick/q4_decode_8tok.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/quick/q4_decode_8tok.json)
-  - q4 decode + safe batch: [`build/reports/quick/q4_decode_safe_batch_8tok.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/quick/q4_decode_safe_batch_8tok.json)
+  - q4 decode only: [`reports/quick/q4_decode_8tok.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/quick/q4_decode_8tok.json)
+  - q4 decode + safe batch: [`reports/quick/q4_decode_safe_batch_8tok.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/quick/q4_decode_safe_batch_8tok.json)
   - `wall_ms`: `984.534 -> 628.509`
   - `gpu_ms`: `255.584 -> 191.310`
   - `command_buffer_count`: `4280 -> 1732`
 - full benchmark 32-token:
-  - q4 decode only: [`build/reports/full_gpu_vs_pytorch_q4_decode/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_decode/summary.json)
-  - q4 decode + safe batch: [`build/reports/full_gpu_vs_pytorch_q4_decode_safe_batch/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_decode_safe_batch/summary.json)
+  - q4 decode only: [`reports/full_gpu_vs_pytorch_q4_decode/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/full_gpu_vs_pytorch_q4_decode/summary.json)
+  - q4 decode + safe batch: [`reports/full_gpu_vs_pytorch_q4_decode_safe_batch/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/full_gpu_vs_pytorch_q4_decode_safe_batch/summary.json)
   - C++ full GPU: `9.65 -> 16.53 tok/s`
   - PyTorch MPS fp16: `54.05 tok/s`
 
@@ -392,13 +392,13 @@ batching은 계속 실험하되, `안전한 op 묶음`과 `hazard 추적` 없이
 ### 실측
 
 - quick 8-token:
-  - safe batch only: [`build/reports/quick/q4_decode_safe_batch_8tok.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/quick/q4_decode_safe_batch_8tok.json)
-  - safe batch + plan: [`build/reports/quick/q4_decode_safe_batch_plan_8tok.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/quick/q4_decode_safe_batch_plan_8tok.json)
+  - safe batch only: [`reports/quick/q4_decode_safe_batch_8tok.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/quick/q4_decode_safe_batch_8tok.json)
+  - safe batch + plan: [`reports/quick/q4_decode_safe_batch_plan_8tok.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/quick/q4_decode_safe_batch_plan_8tok.json)
   - `wall_ms`: `628.509 -> 661.238`
   - quick 기준 약간 회귀
 - full benchmark 32-token:
-  - safe batch only: [`build/reports/full_gpu_vs_pytorch_q4_decode_safe_batch/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_decode_safe_batch/summary.json)
-  - safe batch + plan: [`build/reports/full_gpu_vs_pytorch_q4_decode_safe_batch_plan/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_decode_safe_batch_plan/summary.json)
+  - safe batch only: [`reports/full_gpu_vs_pytorch_q4_decode_safe_batch/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/full_gpu_vs_pytorch_q4_decode_safe_batch/summary.json)
+  - safe batch + plan: [`reports/full_gpu_vs_pytorch_q4_decode_safe_batch_plan/summary.json`](/Volumes/990pro/Documents/SoC/Mac/gpu/reports/full_gpu_vs_pytorch_q4_decode_safe_batch_plan/summary.json)
   - C++ full GPU: `16.53 -> 16.86 tok/s`
 
 ### 판단

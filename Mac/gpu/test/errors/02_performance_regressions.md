@@ -149,7 +149,7 @@
 
 - `Mac/gpu/src/module/qwen_mlp.mm`
 - `Mac/gpu/shaders/gpu_kernels.metal`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch.md`
 
 ## 7. Decode Weight Prepack For MLP + `lm_head`
 
@@ -180,8 +180,8 @@
 - `Mac/gpu/src/model/qwen_model_loader.cpp`
 - `Mac/gpu/src/op/matmul_op.mm`
 - `Mac/gpu/shaders/gpu_kernels.metal`
-- `Mac/gpu/build/reports/quick/packed_decode_check.json`
-- `Mac/gpu/build/reports/quick/packed_decode_check_v2.json`
+- `Mac/gpu/reports/quick/packed_decode_check.json`
+- `Mac/gpu/reports/quick/packed_decode_check_v2.json`
 
 ## 8. Decode `tg_width=16` Override For `OProj` And `DownProj`
 
@@ -210,8 +210,8 @@
 
 - `Mac/gpu/src/module/qwen_attention.mm`
 - `Mac/gpu/src/module/qwen_mlp.mm`
-- `Mac/gpu/build/reports/quick/labeled_breakdown.json`
-- `Mac/gpu/build/reports/quick/labeled_breakdown_width16.json`
+- `Mac/gpu/reports/quick/labeled_breakdown.json`
+- `Mac/gpu/reports/quick/labeled_breakdown_width16.json`
 
 ## 9. `LMHeadDecode` 4-Column-Per-Thread Kernel
 
@@ -298,7 +298,7 @@
 - `Mac/gpu/src/model/qwen_causal_lm.cpp`
 - `Mac/gpu/include/runtime/command_scheduler.h`
 - `Mac/gpu/test/errors/01_windowserver_gpu_fault.md`
-- `Mac/gpu/build/reports/quick/labeled_breakdown_lmhead_gateup.json`
+- `Mac/gpu/reports/quick/labeled_breakdown_lmhead_gateup.json`
 
 ## 10. Decode `Gate/Up` Fused Projection Kernel
 
@@ -326,7 +326,7 @@
 
 - `Mac/gpu/src/module/qwen_mlp.mm`
 - `Mac/gpu/shaders/gpu_kernels.metal`
-- `Mac/gpu/build/reports/quick/labeled_breakdown_gateup_only.json`
+- `Mac/gpu/reports/quick/labeled_breakdown_gateup_only.json`
 
 ## 11. Decode `Q/K/V/O` Q4 Attention Specialization (`16x4`)
 
@@ -355,8 +355,8 @@
 
 - `Mac/gpu/src/op/affine_qmm_op.mm`
 - `Mac/gpu/shaders/gpu_kernels.metal`
-- `Mac/gpu/build/reports/quick/q4_blockattn_logitbatch_qmmmlp_qmmattn_8tok.json`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_blockattn_logitbatch_qmmmlp_qmmattn/summary.json`
+- `Mac/gpu/reports/quick/q4_blockattn_logitbatch_qmmmlp_qmmattn_8tok.json`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_q4_blockattn_logitbatch_qmmmlp_qmmattn/summary.json`
 
 ## 12. Decode `Q/K/V` Q4 Attention Specialization (`32x2`)
 
@@ -385,8 +385,8 @@
 
 - `Mac/gpu/src/op/affine_qmm_op.mm`
 - `Mac/gpu/shaders/gpu_kernels.metal`
-- `Mac/gpu/build/reports/quick/q4_blockattn_logitbatch_qmmmlp_qmmattn2_8tok.json`
-- `Mac/gpu/build/reports/decode_hang_check_q4_blockattn_logitbatch_qmmmlp_qmmattn2.json`
+- `Mac/gpu/reports/quick/q4_blockattn_logitbatch_qmmmlp_qmmattn2_8tok.json`
+- `Mac/gpu/reports/decode_hang_check_q4_blockattn_logitbatch_qmmmlp_qmmattn2.json`
 
 ## 13. Softmax SIMD Cooperative Reduction
 
@@ -415,8 +415,8 @@
 
 - `Mac/gpu/src/op/softmax_op.mm`
 - `Mac/gpu/shaders/gpu_kernels.metal`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_softmax_simd.md`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_softmax_simd_3runs.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_softmax_simd.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_softmax_simd_3runs.md`
 
 ## 14. Decode Final Logits Batch On Top Of Attention Output Batching
 
@@ -442,8 +442,8 @@
 관련 파일:
 
 - `Mac/gpu/src/model/qwen_causal_lm.cpp`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_attn_output_batch.md`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_attn_output_logitbatch.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_attn_output_batch.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_attn_output_logitbatch.md`
 
 ## 15. Dense `LMHeadDecode` 4-Column Kernel On Top Of Current Bounded Decode Path
 
@@ -469,8 +469,8 @@
 
 - `Mac/gpu/src/op/matmul_op.mm`
 - `Mac/gpu/shaders/gpu_kernels.metal`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_lmhead4col_current_3runs.md`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_kvbatch_attnprep_postnorm_3runs_rerun.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_lmhead4col_current_3runs.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_kvbatch_attnprep_postnorm_3runs_rerun.md`
 
 ## 16. Q4 `DownProjDecode` Specialized Kernel On Top Of Current Bounded Decode Path
 
@@ -495,7 +495,7 @@
 관련 파일:
 
 - `Mac/gpu/src/op/affine_qmm_op.mm`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_current_qmmdown/gpu_full_run_1.json`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_q4_current_qmmdown/gpu_full_run_1.json`
 
 ## 17. Dense `DownProjDecode` Width-16 Override On Current Bounded Decode Path
 
@@ -522,8 +522,8 @@
 관련 파일:
 
 - `Mac/gpu/src/module/qwen_mlp.mm`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_dense_detail_current.md`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_downproj16_current.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_dense_detail_current.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_downproj16_current.md`
 
 ## 18. Q4 Decode `Q/K/V`-Only Specialization On Current Bounded Decode Path
 
@@ -550,9 +550,9 @@
 관련 파일:
 
 - `Mac/gpu/src/op/affine_qmm_op.mm`
-- `Mac/gpu/build/reports/decode_hang_check_q4_current_qkvspecialized.json`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_current_qkvspecialized_baseline.md`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_current_qkvspecialized.md`
+- `Mac/gpu/reports/decode_hang_check_q4_current_qkvspecialized.json`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_q4_current_qkvspecialized_baseline.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_q4_current_qkvspecialized.md`
 
 ## 19. Chunked Prefill Full-Token Upload Reuse
 
@@ -579,7 +579,7 @@
 관련 파일:
 
 - `Mac/gpu/src/runtime/generation_context.cpp`
-- `Mac/gpu/build/reports/test_real_bundle_regression_report.md`
+- `Mac/gpu/reports/test_real_bundle_regression_report.md`
 
 ## 20. Decode Hidden-Slot Hazard Relaxation
 
@@ -606,8 +606,8 @@
 
 - `Mac/gpu/src/runtime/command_scheduler.cpp`
 - `Mac/gpu/test/runtime/test_generation_context.mm`
-- `Mac/gpu/build/reports/decode_hidden_relax_baseline.md`
-- `Mac/gpu/build/reports/decode_hidden_relax_experimental.md`
+- `Mac/gpu/reports/decode_hidden_relax_baseline.md`
+- `Mac/gpu/reports/decode_hidden_relax_experimental.md`
 
 ## 21. Safe Decode Encoder Budget 8
 
@@ -637,7 +637,79 @@
 - `Mac/gpu/src/module/qwen_attention.mm`
 - `Mac/gpu/src/module/qwen_block.mm`
 - `Mac/gpu/include/runtime/runtime_policy.h`
-- `Mac/gpu/build/reports/decode_steady_state_q4_safe_batch_rework_baseline.md`
-- `Mac/gpu/build/reports/decode_steady_state_q4_safe_batch_rework_budget8.md`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_safe_batch_rework_baseline.md`
-- `Mac/gpu/build/reports/full_gpu_vs_pytorch_q4_safe_batch_rework_budget8.md`
+- `Mac/gpu/reports/decode_steady_state_q4_safe_batch_rework_baseline.md`
+- `Mac/gpu/reports/decode_steady_state_q4_safe_batch_rework_budget8.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_q4_safe_batch_rework_baseline.md`
+- `Mac/gpu/reports/full_gpu_vs_pytorch_q4_safe_batch_rework_budget8.md`
+# Qwen3.5 GPU RMSNorm Regression
+
+Date: 2026-04-02
+
+Scope:
+- `Mac/gpu/models/qwen3_5/qwen3_5_runner.cpp`
+- `Mac/gpu/models/qwen3_5/qwen3_5_loader_adapter.cpp`
+
+What was attempted:
+- Move `post_attention_layernorm -> MLP` and `final_norm -> LMHead` onto the shared GPU `RmsNormOp`.
+- Promote `qwen3_5` norm weights to device `float32` during load.
+
+Observed result on real machine:
+- first-token parity broke on the reference prompt `"Hello world"`
+- expected argmax token: `0` / `"!"`
+- regressed token: `220` / `" "`
+- wall time also worsened to about `7.18 s`
+
+Why it failed:
+- `qwen3_5_runner.cpp` host reference path uses:
+  - `output = input * inv_rms * (1 + weight)`
+- shared GPU `RmsNormOp` kernel uses:
+  - `output = input * inv_rms * weight`
+- this is not a generic scheduler or batching issue
+- it is a contract mismatch in how `qwen3_5` interprets norm weights
+
+Correct conclusion:
+- the problem is not “GPU RMSNorm is impossible”
+- the problem is “reusing the shared RMSNorm operator without a `qwen3_5`-compatible weight contract changes the math”
+
+Current policy:
+- default `qwen3_5` runner keeps `post_attention RMSNorm` and `final RMSNorm` on the validated host path
+- any future GPU RMSNorm re-enable must first do one of:
+  - add a `qwen3_5`-specific RMSNorm kernel/parameter mode
+  - or prepack a mathematically equivalent device-side norm weight contract with explicit parity validation
+
+# Qwen3.5 Narrow Decode Projection Regression
+
+Date: 2026-04-02
+
+Scope:
+- `Mac/gpu/models/qwen3_5/qwen3_5_runner.cpp`
+
+What was attempted:
+- Re-enable only the narrowest decode-side GPU slices with:
+  - `SOC_GPU_ENABLE_EXPERIMENTAL_QWEN3_5_DECODE_EMBEDDING_GPU=1`
+  - `SOC_GPU_ENABLE_EXPERIMENTAL_QWEN3_5_DECODE_OUTPUT_PROJECTION_GPU=1`
+- Keep `q/k/v`, DeltaNet `in_proj_*`, RMSNorm, RoPE, and recurrent state update on the host path.
+
+Observed result on real machine:
+- argmax parity on `"Hello world"` was preserved
+- generated token ids stayed `[0, 271, 9419, 11]`
+- but throughput regressed versus the best current experimental path
+- measured report:
+  - `Mac/gpu/reports/qwen3_5_4b_4tok_gpu_decodeproj.json`
+  - prefill wall `6051.9 ms`
+  - decode wall `7800.5 ms`
+  - decode throughput `0.513 tok/s`
+
+Why it failed:
+- the change only moved cheap boundary ops
+- it did not move the decode-hot projection families that dominate the current hybrid runner
+- upload / readback overhead remained, while extra GPU dispatches were added
+
+Correct conclusion:
+- the problem is not “decode-only GPU slices are impossible”
+- the problem is “re-enabling only embedding + output projections does not attack the real decode bottleneck”
+
+Current policy:
+- keep this path experimental only
+- do not promote it as the default `qwen3_5` decode configuration
+- prefer validating the broader projection path on multiple prompts before deciding which projection subsets are safe enough to keep

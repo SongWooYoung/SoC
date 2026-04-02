@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -16,6 +18,7 @@ class MetalContext;
 struct SamplerConfig {
     float temperature = 1.0f;
     std::size_t top_k = 1;
+    std::uint64_t seed = 1234;
 };
 
 class Sampler {
@@ -35,6 +38,7 @@ public:
 
 private:
     SamplerConfig config_;
+    mutable std::mt19937_64 rng_;
     mutable std::shared_ptr<class MetalBuffer> top_values_buffer_;
     mutable std::shared_ptr<class MetalBuffer> top_indices_buffer_;
 };

@@ -41,6 +41,7 @@ struct InferCliOptions {
     std::string output_file;
     std::string prompt_cache_artifact_save;
     std::string prompt_cache_artifact_load;
+    std::string qwen3_5_boundary_probe_output;
     RuntimeGenerationOptions generation;
     RuntimePromptOptions prompt_options;
     std::size_t temporary_arena_bytes = 1ull << 26;
@@ -49,7 +50,9 @@ struct InferCliOptions {
     bool override_top_k = false;
     bool override_eos_token_id = false;
     bool override_max_sequence_length = false;
+    bool override_enable_thinking = false;
     bool json_output = false;
+    bool validate_only = false;
     int layer = -1;
     bool verbose = false;
     MetalProfilingMode profiling_mode = MetalProfilingMode::kSummary;

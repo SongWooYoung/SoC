@@ -7,8 +7,8 @@ gpu_dir=${script_dir:h}
 
 manifest_path=${SOC_QWEN3_MANIFEST:-${gpu_dir:h:h}/models/cpp/qwen3-0.6b/manifest.json}
 integration_bin=${SOC_GPU_INTEGRATION_BIN:-${gpu_dir}/build/bin/test_real_bundle_regression}
-summary_path=${SOC_GPU_SWEEP_SUMMARY:-${gpu_dir}/build/reports/test_real_bundle_sweep_summary.md}
-report_dir=${SOC_GPU_SWEEP_REPORT_DIR:-${gpu_dir}/build/reports/sweep_cases}
+summary_path=${SOC_GPU_SWEEP_SUMMARY:-${gpu_dir}/reports/test_real_bundle_sweep_summary.md}
+report_dir=${SOC_GPU_SWEEP_REPORT_DIR:-${gpu_dir}/reports/sweep_cases}
 max_new_tokens=${SOC_QWEN_MAX_NEW_TOKENS:-8}
 
 if [[ ! -f "${manifest_path}" ]]; then

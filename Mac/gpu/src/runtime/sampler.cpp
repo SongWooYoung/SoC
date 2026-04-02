@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <cmath>
+#include <limits>
+#include <random>
 
 #include "buffer/buffer_arena.h"
 #include "buffer/metal_buffer.h"
@@ -20,7 +23,9 @@ bool UseExperimentalGpuSampler() {
 
 bool SampleFromLogitsCpuFallback(const DeviceTensor& logits,
                                  std::size_t row_index,
+                                 float temperature,
                                  std::size_t top_k,
+                                 std::mt19937_64* rng,
                                  int* token_id,
                                  std::vector<float>* top_logits,
                                  std::vector<int>* top_token_ids,
@@ -42,7 +47,31 @@ bool SampleFromLogitsCpuFallback(const DeviceTensor& logits,
                           return row[lhs] > row[rhs];
                       });
 
-    *token_id = static_cast<int>(candidates[0]);
+    if (top_k == 1) {
+        *token_id = static_cast<int>(candidates[0]);
+    } else {
+        if (rng == nullptr) {
+            if (error_message != nullptr) {
+                *error_message = "Sampler RNG must not be null";
+            }
+            return false;
+        }
+        std::vector<double> scaled_logits(top_k, 0.0);
+        double max_score = -std::numeric_limits<double>::infinity();
+        for (std::size_t rank = 0; rank < top_k; ++rank) {
+            const double score = static_cast<double>(row[candidates[rank]]) / static_cast<double>(temperature);
+            scaled_logits[rank] = score;
+            if (score > max_score) {
+                max_score = score;
+            }
+        }
+        std::vector<double> weights(top_k, 0.0);
+        for (std::size_t rank = 0; rank < top_k; ++rank) {
+            weights[rank] = std::exp(scaled_logits[rank] - max_score);
+        }
+        std::discrete_distribution<std::size_t> distribution(weights.begin(), weights.end());
+        *token_id = static_cast<int>(candidates[distribution(*rng)]);
+    }
     if (top_logits != nullptr) {
         top_logits->clear();
         for (std::size_t rank = 0; rank < top_k; ++rank) {
@@ -99,7 +128,7 @@ bool EnsureTopKBuffers(const MetalContext& context,
 
 }  // namespace
 
-Sampler::Sampler(SamplerConfig config) : config_(config) {}
+Sampler::Sampler(SamplerConfig config) : config_(config), rng_(config.seed) {}
 
 const SamplerConfig& Sampler::config() const { return config_; }
 
@@ -131,6 +160,7 @@ bool Sampler::SampleFromLogits(const MetalContext& context,
         return false;
     }
     const std::size_t vocab_size = logits.GetDesc().GetShape()[1];
+    const float temperature = std::max(config_.temperature, 1e-5f);
     const std::size_t top_k = std::max<std::size_t>(1, std::min<std::size_t>(config_.top_k, vocab_size));
 
     // The current GPU top-k kernel is a single-row scalar scan and measured
@@ -142,7 +172,9 @@ bool Sampler::SampleFromLogits(const MetalContext& context,
     if (should_use_cpu_sampler) {
         return SampleFromLogitsCpuFallback(logits,
                                            row_index,
+                                           temperature,
                                            top_k,
+                                           &rng_,
                                            token_id,
                                            top_logits,
                                            top_token_ids,
@@ -189,7 +221,27 @@ bool Sampler::SampleFromLogits(const MetalContext& context,
         return false;
     }
 
-    *token_id = reduced_indices.empty() ? -1 : reduced_indices[0];
+    if (reduced_indices.empty()) {
+        *token_id = -1;
+    } else if (reduced_indices.size() == 1) {
+        *token_id = reduced_indices[0];
+    } else {
+        std::vector<double> scaled_logits(reduced_logits.size(), 0.0);
+        double max_score = -std::numeric_limits<double>::infinity();
+        for (std::size_t rank = 0; rank < reduced_logits.size(); ++rank) {
+            const double score = static_cast<double>(reduced_logits[rank]) / static_cast<double>(temperature);
+            scaled_logits[rank] = score;
+            if (score > max_score) {
+                max_score = score;
+            }
+        }
+        std::vector<double> weights(reduced_logits.size(), 0.0);
+        for (std::size_t rank = 0; rank < reduced_logits.size(); ++rank) {
+            weights[rank] = std::exp(scaled_logits[rank] - max_score);
+        }
+        std::discrete_distribution<std::size_t> distribution(weights.begin(), weights.end());
+        *token_id = reduced_indices[distribution(rng_)];
+    }
     if (top_logits != nullptr) {
         top_logits->assign(reduced_logits.begin(), reduced_logits.end());
     }

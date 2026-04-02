@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <vector>
 
@@ -14,7 +15,7 @@ void Require(bool condition, const char* message) {
 }
 }
 
-Sampler::Sampler(SamplerConfig config) : config_(config) {
+Sampler::Sampler(SamplerConfig config) : config_(config), rng_(config.seed) {
     Require(config_.temperature > 0.0f, "sampler temperature must be positive");
     Require(config_.top_k != 0, "sampler top_k must be positive");
 }
@@ -47,16 +48,26 @@ int Sampler::SampleFromLogits(const Tensor& logits, std::size_t batch_index, std
             return logits_row[left] / config_.temperature > logits_row[right] / config_.temperature;
         });
 
-    std::size_t best_index = candidates[0];
-    float best_score = logits_row[best_index] / config_.temperature;
-    for (std::size_t rank = 1; rank < top_k; ++rank) {
-        const std::size_t candidate = candidates[rank];
-        const float score = logits_row[candidate] / config_.temperature;
-        if (score > best_score) {
-            best_score = score;
-            best_index = candidate;
+    if (top_k == 1) {
+        return static_cast<int>(candidates[0]);
+    }
+
+    std::vector<double> scaled_logits(top_k, 0.0);
+    double max_score = -std::numeric_limits<double>::infinity();
+    for (std::size_t rank = 0; rank < top_k; ++rank) {
+        const double score = static_cast<double>(logits_row[candidates[rank]]) / static_cast<double>(config_.temperature);
+        scaled_logits[rank] = score;
+        if (score > max_score) {
+            max_score = score;
         }
     }
 
-    return static_cast<int>(best_index);
+    std::vector<double> weights(top_k, 0.0);
+    for (std::size_t rank = 0; rank < top_k; ++rank) {
+        weights[rank] = std::exp(scaled_logits[rank] - max_score);
+    }
+
+    std::discrete_distribution<std::size_t> distribution(weights.begin(), weights.end());
+    const std::size_t sampled_rank = distribution(rng_);
+    return static_cast<int>(candidates[sampled_rank]);
 }

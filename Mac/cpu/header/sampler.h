@@ -2,6 +2,8 @@
 #define SAMPLER_H
 
 #include <cstddef>
+#include <cstdint>
+#include <random>
 #include <vector>
 
 #include "header/tensor.h"
@@ -9,6 +11,7 @@
 struct SamplerConfig {
     float temperature = 1.0f;
     std::size_t top_k = 1;
+    std::uint64_t seed = 1234;
 };
 
 class Sampler {
@@ -20,6 +23,7 @@ public:
 
 private:
     SamplerConfig config_;
+    mutable std::mt19937_64 rng_;
 };
 
 #endif

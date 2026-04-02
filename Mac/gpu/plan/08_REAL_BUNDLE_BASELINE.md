@@ -111,13 +111,13 @@ make integration
 
 report artifact:
 
-1. `Mac/gpu/build/reports/test_real_bundle_regression_report.md`
+1. `Mac/gpu/reports/test_real_bundle_regression_report.md`
 
 유용한 override:
 
 ```sh
 SOC_QWEN_PROMPT='A shorter prompt' \
 SOC_QWEN_MAX_NEW_TOKENS=4 \
-SOC_GPU_REPORT_PATH=build/reports/custom_report.md \
+SOC_GPU_REPORT_PATH=reports/custom_report.md \
 make integration
 ```

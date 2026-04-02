@@ -17,6 +17,7 @@ struct TensorRecord {
     std::string file;
     std::string dtype;
     std::vector<std::size_t> shape;
+    std::size_t file_offset = 0;
     std::size_t byte_size = 0;
     std::string source_shard;
 };

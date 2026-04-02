@@ -51,6 +51,18 @@ std::size_t ResolvePrefillStepSize(std::size_t configured_step_size) {
     return static_cast<std::size_t>(parsed);
 }
 
+std::size_t ResolveEffectiveMaxNewTokens(const std::size_t prompt_token_count,
+                                         const std::size_t max_new_tokens,
+                                         const std::size_t max_sequence_length) {
+    if (max_new_tokens != 0) {
+        return max_new_tokens;
+    }
+    if (max_sequence_length <= prompt_token_count) {
+        return 0;
+    }
+    return max_sequence_length - prompt_token_count;
+}
+
 template <typename T>
 bool WriteBinary(std::ofstream* stream, const T& value, std::string* error_message) {
     stream->write(reinterpret_cast<const char*>(&value), sizeof(T));
@@ -274,13 +286,15 @@ bool GenerationContext::Generate(const MetalContext& context,
     if (!Prefill(context, pipeline_cache, prompt_token_ids, temporary_arena, error_message)) {
         return false;
     }
-    if (max_new_tokens == 0) {
+    const std::size_t effective_max_new_tokens =
+        ResolveEffectiveMaxNewTokens(prompt_token_ids.size(), max_new_tokens, max_sequence_length_);
+    if (effective_max_new_tokens == 0) {
         return true;
     }
 
     return GenerateFromLoadedPromptCache(context,
                                          pipeline_cache,
-                                         max_new_tokens,
+                                         effective_max_new_tokens,
                                          eos_token_id,
                                          temporary_arena,
                                          generated_token_ids,
@@ -308,7 +322,9 @@ bool GenerationContext::GenerateFromLoadedPromptCache(const MetalContext& contex
         }
         return false;
     }
-    if (max_new_tokens == 0) {
+    const std::size_t effective_max_new_tokens =
+        ResolveEffectiveMaxNewTokens(prompt_token_ids_.size(), max_new_tokens, max_sequence_length_);
+    if (effective_max_new_tokens == 0) {
         return true;
     }
 
@@ -335,7 +351,7 @@ bool GenerationContext::GenerateFromLoadedPromptCache(const MetalContext& contex
     }
 
     int last_token_id = first_step_result.token_id;
-    for (std::size_t step = 1; step < max_new_tokens; ++step) {
+    for (std::size_t step = 1; step < effective_max_new_tokens; ++step) {
         GenerationStepResult step_result;
         if (!DecodeNextToken(context, pipeline_cache, last_token_id, temporary_arena, &step_result, error_message)) {
             return false;

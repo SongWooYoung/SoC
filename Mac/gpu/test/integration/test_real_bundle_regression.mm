@@ -126,7 +126,7 @@ std::filesystem::path ResolveReportPath() {
     if (report_env != nullptr && report_env[0] != '\0') {
         return report_env;
     }
-    return "build/reports/test_real_bundle_regression_report.md";
+    return "reports/test_real_bundle_regression_report.md";
 }
 
 std::filesystem::path BuildPromptCacheArtifactPath(const std::string& case_name,

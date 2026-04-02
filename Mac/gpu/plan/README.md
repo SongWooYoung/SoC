@@ -91,7 +91,7 @@
 
 현재 real-bundle regression 결과는 두 군데에 남긴다.
 
-1. build artifact report: `Mac/gpu/build/reports/test_real_bundle_regression_report.md`
+1. build artifact report: `Mac/gpu/reports/test_real_bundle_regression_report.md`
 2. repo-stable summary: `Mac/gpu/plan/09_TEST_RESULTS.md`
 
 첫 번째는 test를 다시 돌릴 때 갱신되는 실행 결과이고, 두 번째는 현재 확인된 baseline과 남은 작업을 repo 안에 고정해 두는 문서다.
@@ -144,7 +144,7 @@ JSON 출력:
    --prompt 'Write one short friendly reply to: Hello world' \
    --max-new-tokens 16 \
    --json \
-   --output-file build/reports/quick/infer.json
+   --output-file reports/quick/infer.json
 ```
 
 기본 출력은 plain text 한 줄이며, `--output-file`을 주면 해당 payload를 파일에 쓴다. `--json`을 주면 prompt, token ids, generated text, device, GPU timing을 포함한 JSON object를 쓴다. `--verbose`를 주면 token ids와 GPU timing 요약을 stderr에 함께 출력한다.

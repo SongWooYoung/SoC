@@ -24,6 +24,7 @@ def benchmark(
     model_id: str,
     prompt: str,
     max_new_tokens: int,
+    max_seq_len: int,
     device: str,
     dtype: torch.dtype,
     num_warmup: int,
@@ -35,6 +36,7 @@ def benchmark(
         "dtype": str(dtype),
         "prompt": prompt,
         "max_new_tokens": max_new_tokens,
+        "max_seq_len": max_seq_len,
         "num_warmup": num_warmup,
         "num_runs": num_runs,
     }
@@ -74,6 +76,7 @@ def benchmark(
     prompt_len = input_ids.shape[1]
     results["prompt_tokens"] = prompt_len
     print(f"  Prompt tokens: {prompt_len}", file=sys.stderr)
+    effective_max_new_tokens = max_new_tokens if max_new_tokens != 0 else max(0, max_seq_len - prompt_len)
 
     # ── Warmup ────────────────────────────────────────────────────────
     print(f"Warmup ({num_warmup} runs) …", file=sys.stderr)
@@ -81,7 +84,7 @@ def benchmark(
         with torch.no_grad():
             _ = model.generate(
                 input_ids,
-                max_new_tokens=max_new_tokens,
+                max_new_tokens=max(effective_max_new_tokens, 1),
                 do_sample=False,
                 temperature=1.0,
                 top_k=1,
@@ -118,7 +121,7 @@ def benchmark(
         current_token = next_token
         t_decode_start = time.perf_counter()
         with torch.no_grad():
-            for _ in range(max_new_tokens - 1):
+            for _ in range(max(effective_max_new_tokens - 1, 0)):
                 outputs = model(current_token, past_key_values=past_kv, use_cache=True)
                 past_kv = outputs.past_key_values
                 current_token = outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
@@ -185,6 +188,8 @@ def main():
                         help="Prompt text")
     parser.add_argument("--max-new-tokens", type=int, default=50,
                         help="Max tokens to generate")
+    parser.add_argument("--max-seq-len", type=int, default=256,
+                        help="Max total sequence length when max-new-tokens=0")
     parser.add_argument("--device", default="mps",
                         choices=["mps", "cpu"],
                         help="Device to run on")
@@ -209,6 +214,7 @@ def main():
         model_id=args.model,
         prompt=args.prompt,
         max_new_tokens=args.max_new_tokens,
+        max_seq_len=args.max_seq_len,
         device=args.device,
         dtype=dtype_map[args.dtype],
         num_warmup=args.warmup,

@@ -2,7 +2,7 @@
 
 `gpu_infer --layer k`의 실측 benchmark를 `Hello world`, `max_new_tokens=64` 조건으로 돌린 결과다.
 
-실행 artifact는 `Mac/gpu/build/reports/layer_split_benchmark.md`와 `Mac/gpu/build/reports/layer_split_benchmark/layer_*.json` 아래에 남는다. 이 문서는 현재 확인된 결과를 repo-stable로 고정한 것이다.
+실행 artifact는 `Mac/gpu/reports/layer_split_benchmark.md`와 `Mac/gpu/reports/layer_split_benchmark/layer_*.json` 아래에 남는다. 이 문서는 현재 확인된 결과를 repo-stable로 고정한 것이다.
 
 ## Setup
 

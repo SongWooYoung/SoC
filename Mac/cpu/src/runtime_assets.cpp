@@ -251,6 +251,9 @@ std::string Qwen3TemplateBuilder::BuildPrompt(
         prompt << template_runtime_.im_start << "assistant\n";
         if (enable_thinking) {
             prompt << template_runtime_.think_start << '\n';
+        } else {
+            prompt << template_runtime_.think_start << "\n\n";
+            prompt << template_runtime_.think_end << "\n\n";
         }
     }
 

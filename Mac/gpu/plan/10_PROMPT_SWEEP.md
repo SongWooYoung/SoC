@@ -7,13 +7,13 @@
 ## Saved Location
 
 1. Full sweep summary
-   `Mac/gpu/build/reports/test_real_bundle_sweep_summary.md`
+   `Mac/gpu/reports/test_real_bundle_sweep_summary.md`
 2. Full sweep per-case reports
-   `Mac/gpu/build/reports/sweep_cases/*.md`
+   `Mac/gpu/reports/sweep_cases/*.md`
 3. Quick sweep summary
-   `Mac/gpu/build/reports/quick/test_real_bundle_sweep_summary.md`
+   `Mac/gpu/reports/quick/test_real_bundle_sweep_summary.md`
 4. Quick sweep per-case reports
-   `Mac/gpu/build/reports/quick/sweep_cases/*.md`
+   `Mac/gpu/reports/quick/sweep_cases/*.md`
 
 ## Coverage
 

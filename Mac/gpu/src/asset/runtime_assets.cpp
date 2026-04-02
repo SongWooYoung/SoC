@@ -80,6 +80,9 @@ ManifestData ManifestLoader::LoadFromFile(const std::string& manifest_path) {
         tensor.file = ResolveRelativePath(manifest_dir, RequireString(tensor_value, "file"));
         tensor.dtype = RequireString(tensor_value, "dtype");
         tensor.shape = ParseShape(tensor_value.at("shape"));
+        tensor.file_offset = tensor_value.contains("file_offset") && !tensor_value.at("file_offset").is_null()
+            ? RequireSize(tensor_value, "file_offset")
+            : 0;
         tensor.byte_size = RequireSize(tensor_value, "byte_size");
         tensor.source_shard = RequireString(tensor_value, "source_shard");
         manifest.tensors.push_back(std::move(tensor));
@@ -124,14 +127,14 @@ bool TensorFileLoader::LoadBytes(const TensorRecord& tensor_record,
 
     stream.seekg(0, std::ios::end);
     const std::size_t file_size = static_cast<std::size_t>(stream.tellg());
-    stream.seekg(0, std::ios::beg);
     const std::size_t expected_size = tensor_record.byte_size == 0 ? file_size : tensor_record.byte_size;
-    if (file_size != expected_size) {
+    if (tensor_record.file_offset > file_size || tensor_record.file_offset + expected_size > file_size) {
         if (error_message != nullptr) {
             *error_message = "tensor file size mismatch for " + tensor_record.name;
         }
         return false;
     }
+    stream.seekg(static_cast<std::streamoff>(tensor_record.file_offset), std::ios::beg);
 
     bytes->assign(expected_size, 0);
     stream.read(bytes->data(), static_cast<std::streamsize>(expected_size));

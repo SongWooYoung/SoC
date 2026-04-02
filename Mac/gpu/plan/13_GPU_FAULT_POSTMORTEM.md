@@ -145,4 +145,4 @@ Mac mini M4 32GB에서 `WindowServer` 오류창과 화면 깨짐을 동반한 GP
 
 - Apple Metal Best Practices Guide: <https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/index.html>
 - Apple Metal Programming Guide, resource storage modes: <https://developer.apple.com/library/archive/documentation/Miscellaneous/Conceptual/MetalProgrammingGuide/WhatsNewiniOS9andOSX1011/WhatsNewiniOS9andOSX1011.html>
-- full GPU vs PyTorch benchmark report: `Mac/gpu/build/reports/full_gpu_vs_pytorch.md`
+- full GPU vs PyTorch benchmark report: `Mac/gpu/reports/full_gpu_vs_pytorch.md`

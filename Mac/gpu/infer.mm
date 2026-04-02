@@ -21,6 +21,8 @@
 #include "models/model_registry.h"
 #include "models/qwen3/qwen3_loader_adapter.h"
 #include "models/qwen3/qwen3_runner.h"
+#include "models/qwen3_5/qwen3_5_loader_adapter.h"
+#include "models/qwen3_5/qwen3_5_runner.h"
 #include "runtime/command_scheduler.h"
 #include "runtime/generation_context.h"
 #include "runtime/layer_range_model_runner.h"
@@ -95,6 +97,8 @@ soc::gpu::MetalProfilingMode ParseProfilingMode(const std::string& value) {
         << "  --prompt <text>            Prompt text to generate from\n"
         << "  --prompt-file <path>       Read prompt text from a UTF-8 text file ('-' reads stdin)\n"
         << "  --output-file <path>       Write the primary result payload to a file instead of stdout\n"
+        << "  --validate-only            Load manifest/tokenizer/model metadata and stop before inference\n"
+        << "  --qwen3_5-boundary-probe <path>  Dump prompt-boundary logits/state probe JSON for qwen3_5 and stop\n"
         << "  --prompt-cache-artifact-save <path>  Save a prompt cache artifact after prefill\n"
         << "  --prompt-cache-artifact-load <path>  Load a prompt cache artifact instead of running prefill\n"
         << "  --json                     Emit a JSON object instead of plain text\n"
@@ -106,6 +110,7 @@ soc::gpu::MetalProfilingMode ParseProfilingMode(const std::string& value) {
         << "  --max-seq-len <n>          KV cache capacity for generation\n"
         << "  --apply-chat-template      Wrap prompt as a single user chat turn\n"
         << "  --disable-thinking         Omit the opening <think> tag in chat template mode\n"
+        << "  --enable-thinking          Force the opening <think> tag in chat template mode\n"
         << "  --system-prompt <text>     Override the default chat template system prompt\n"
         << "  --metallib <path>          Override compiled metallib path\n"
         << "  --shader-source <path>     Override Metal shader source path\n"
@@ -154,6 +159,10 @@ soc::gpu::InferCliOptions ParseArgs(int argc, char** argv) {
             options.prompt_file = require_value("--prompt-file");
         } else if (argument == "--output-file") {
             options.output_file = require_value("--output-file");
+        } else if (argument == "--validate-only") {
+            options.validate_only = true;
+        } else if (argument == "--qwen3_5-boundary-probe") {
+            options.qwen3_5_boundary_probe_output = require_value("--qwen3_5-boundary-probe");
         } else if (argument == "--prompt-cache-artifact-save") {
             options.prompt_cache_artifact_save = require_value("--prompt-cache-artifact-save");
         } else if (argument == "--prompt-cache-artifact-load") {
@@ -181,6 +190,10 @@ soc::gpu::InferCliOptions ParseArgs(int argc, char** argv) {
             options.prompt_options.apply_chat_template = true;
         } else if (argument == "--disable-thinking") {
             options.prompt_options.enable_thinking = false;
+            options.override_enable_thinking = true;
+        } else if (argument == "--enable-thinking") {
+            options.prompt_options.enable_thinking = true;
+            options.override_enable_thinking = true;
         } else if (argument == "--system-prompt") {
             options.prompt_options.system_prompt = require_value("--system-prompt");
         } else if (argument == "--metallib") {
@@ -200,7 +213,7 @@ soc::gpu::InferCliOptions ParseArgs(int argc, char** argv) {
         }
     }
 
-    if (options.prompt.empty() == options.prompt_file.empty()) {
+    if (!options.validate_only && options.prompt.empty() == options.prompt_file.empty()) {
         throw std::runtime_error("provide exactly one of --prompt or --prompt-file");
     }
     if (!options.prompt_cache_artifact_save.empty() && !options.prompt_cache_artifact_load.empty()) {
@@ -221,10 +234,18 @@ std::string ResolvePromptText(const soc::gpu::InferCliOptions& options) {
 }
 
 std::size_t ReadManifestLayerCount(const ManifestData& manifest) {
-    if (!manifest.config.is_object() || !manifest.config.contains("num_hidden_layers")) {
+    if (!manifest.config.is_object()) {
         throw std::runtime_error("manifest config is missing num_hidden_layers");
     }
-    return static_cast<std::size_t>(manifest.config.at("num_hidden_layers").as_int64());
+    if (manifest.config.contains("num_hidden_layers")) {
+        return static_cast<std::size_t>(manifest.config.at("num_hidden_layers").as_int64());
+    }
+    if (manifest.config.contains("text_config") &&
+        manifest.config.at("text_config").is_object() &&
+        manifest.config.at("text_config").contains("num_hidden_layers")) {
+        return static_cast<std::size_t>(manifest.config.at("text_config").at("num_hidden_layers").as_int64());
+    }
+    throw std::runtime_error("manifest config is missing num_hidden_layers");
 }
 
 ExecutionPlan ResolveExecutionPlan(const soc::gpu::InferCliOptions& options, const ManifestData& manifest) {
@@ -258,6 +279,17 @@ ExecutionPlan ResolveExecutionPlan(const soc::gpu::InferCliOptions& options, con
 
 double DurationMilliseconds(const Clock::time_point& start_time, const Clock::time_point& end_time) {
     return std::chrono::duration<double, std::milli>(end_time - start_time).count();
+}
+
+std::size_t ResolveEffectiveMaxNewTokens(const std::size_t prompt_token_count,
+                                         const soc::gpu::RuntimeGenerationOptions& generation) {
+    if (generation.max_new_tokens != 0) {
+        return generation.max_new_tokens;
+    }
+    if (generation.max_sequence_length <= prompt_token_count) {
+        return 0;
+    }
+    return generation.max_sequence_length - prompt_token_count;
 }
 
 soc::gpu::DeviceTensor UploadGpuTokenIds(const soc::gpu::MetalContext& context,
@@ -484,6 +516,138 @@ std::string JsonProfilingEntries(const soc::gpu::MetalProfilingSnapshot& snapsho
     return stream.str();
 }
 
+std::string BuildValidationOutput(const soc::gpu::InferCliOptions& options,
+                                  const soc::gpu::ModelSelection& model_selection,
+                                  const ManifestData& manifest,
+                                  const TokenizerRuntimeData& tokenizer_runtime,
+                                  const soc::gpu::ModelRunner& runner,
+                                  const soc::gpu::MetalDeviceInfo& device_info,
+                                  const double wall_ms) {
+    std::size_t total_tensor_bytes = 0;
+    for (const auto& tensor : manifest.tensors) {
+        total_tensor_bytes += tensor.byte_size;
+    }
+    const auto* qwen3_5_runner = dynamic_cast<const soc::gpu::models::qwen3_5::Qwen3_5Runner*>(&runner);
+
+    std::ostringstream stream;
+    if (!options.json_output) {
+        stream << "validation_ok\n";
+        stream << "model_type=" << model_selection.registry_name << "\n";
+        stream << "manifest=" << options.manifest_path << "\n";
+        stream << "layers=" << runner.num_layers() << "\n";
+        stream << "hidden_size=" << runner.hidden_size() << "\n";
+        stream << "vocab_size=" << runner.vocab_size() << "\n";
+        stream << "max_position_embeddings=" << runner.max_position_embeddings() << "\n";
+        stream << "tokenizer_vocab_size=" << tokenizer_runtime.vocab_size << "\n";
+        stream << "tensor_count=" << manifest.tensors.size() << "\n";
+        stream << "tensor_bytes=" << total_tensor_bytes << "\n";
+        if (qwen3_5_runner != nullptr) {
+            stream << "loaded_weights=" << (qwen3_5_runner->has_loaded_weights() ? "true" : "false") << "\n";
+            stream << "recurrent_state_bytes=" << qwen3_5_runner->state_layout().total_recurrent_state_bytes << "\n";
+        }
+        stream << "wall_ms=" << wall_ms << "\n";
+        return stream.str();
+    }
+
+    stream << "{\n";
+    stream << "  \"validation_only\": true,\n";
+    stream << "  \"manifest\": \"" << JsonEscape(options.manifest_path) << "\",\n";
+    stream << "  \"model_type\": \"" << JsonEscape(model_selection.registry_name) << "\",\n";
+    stream << "  \"runner\": {\n";
+    stream << "    \"num_layers\": " << runner.num_layers() << ",\n";
+    stream << "    \"hidden_size\": " << runner.hidden_size() << ",\n";
+    stream << "    \"num_key_value_heads\": " << runner.num_key_value_heads() << ",\n";
+    stream << "    \"head_dim\": " << runner.head_dim() << ",\n";
+    stream << "    \"vocab_size\": " << runner.vocab_size() << ",\n";
+    stream << "    \"max_position_embeddings\": " << runner.max_position_embeddings() << "\n";
+    stream << "  },\n";
+    stream << "  \"manifest_summary\": {\n";
+    stream << "    \"tensor_count\": " << manifest.tensors.size() << ",\n";
+    stream << "    \"tensor_bytes\": " << total_tensor_bytes << ",\n";
+    stream << "    \"export_dtype\": \"" << JsonEscape(manifest.export_dtype) << "\",\n";
+    stream << "    \"model_id\": \"" << JsonEscape(manifest.model_id) << "\"\n";
+    stream << "  },\n";
+    if (qwen3_5_runner != nullptr) {
+        stream << "  \"qwen3_5\": {\n";
+        stream << "    \"loaded_weights\": " << (qwen3_5_runner->has_loaded_weights() ? "true" : "false") << ",\n";
+        stream << "    \"recurrent_state_bytes\": " << qwen3_5_runner->state_layout().total_recurrent_state_bytes << ",\n";
+        stream << "    \"deltanet_layer_count\": " << qwen3_5_runner->state_layout().deltanet_layers.size() << "\n";
+        stream << "  },\n";
+    }
+    stream << "  \"tokenizer\": {\n";
+    stream << "    \"vocab_size\": " << tokenizer_runtime.vocab_size << ",\n";
+    stream << "    \"model_max_length\": " << tokenizer_runtime.model_max_length << "\n";
+    stream << "  },\n";
+    stream << "  \"device\": {\n";
+    stream << "    \"name\": \"" << JsonEscape(device_info.name) << "\",\n";
+    stream << "    \"is_apple_silicon_gpu\": " << (device_info.is_apple_silicon_gpu ? "true" : "false") << ",\n";
+    stream << "    \"has_unified_memory\": " << (device_info.has_unified_memory ? "true" : "false") << "\n";
+    stream << "  },\n";
+    stream << "  \"timing\": {\n";
+    stream << "    \"wall_ms\": " << wall_ms << "\n";
+    stream << "  }\n";
+    stream << "}\n";
+    return stream.str();
+}
+
+std::string JsonTopLogits(const std::vector<soc::gpu::models::qwen3_5::Qwen3_5TopLogitEntry>& entries) {
+    std::ostringstream stream;
+    stream << "[";
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+        if (index > 0) {
+            stream << ", ";
+        }
+        stream << "{"
+               << "\"token_id\": " << entries[index].token_id << ", "
+               << "\"logit\": " << entries[index].logit
+               << "}";
+    }
+    stream << "]";
+    return stream.str();
+}
+
+std::string BuildQwen3_5BoundaryProbeOutput(const soc::gpu::InferCliOptions& options,
+                                            const std::string& prompt_text,
+                                            const std::string& prepared_prompt,
+                                            const std::vector<int>& prompt_token_ids,
+                                            const soc::gpu::models::qwen3_5::Qwen3_5BoundaryProbe& probe,
+                                            const soc::gpu::MetalDeviceInfo& device_info,
+                                            const double wall_ms) {
+    std::ostringstream stream;
+    stream << "{\n";
+    stream << "  \"mode\": \"qwen3_5_boundary_probe\",\n";
+    stream << "  \"manifest\": \"" << JsonEscape(options.manifest_path) << "\",\n";
+    stream << "  \"prompt\": \"" << JsonEscape(prompt_text) << "\",\n";
+    stream << "  \"serialized_prompt\": \"" << JsonEscape(prepared_prompt) << "\",\n";
+    stream << "  \"prompt_token_ids\": " << JsonArray(prompt_token_ids) << ",\n";
+    stream << "  \"device\": {\n";
+    stream << "    \"name\": \"" << JsonEscape(device_info.name) << "\",\n";
+    stream << "    \"is_apple_silicon_gpu\": " << (device_info.is_apple_silicon_gpu ? "true" : "false") << "\n";
+    stream << "  },\n";
+    stream << "  \"boundary\": {\n";
+    stream << "    \"full_prompt_argmax_id\": " << probe.full_prompt_argmax_id << ",\n";
+    stream << "    \"replay_warm_argmax_id\": " << probe.replay_warm_argmax_id << ",\n";
+    stream << "    \"max_abs_logit_diff\": " << probe.max_abs_logit_diff << ",\n";
+    stream << "    \"mean_abs_logit_diff\": " << probe.mean_abs_logit_diff << ",\n";
+    stream << "    \"full_prompt_top_logits\": " << JsonTopLogits(probe.full_prompt_top_logits) << ",\n";
+    stream << "    \"replay_warm_top_logits\": " << JsonTopLogits(probe.replay_warm_top_logits) << ",\n";
+    stream << "    \"attention_cache_lengths\": " << JsonSizeArray(probe.attention_cache_lengths) << ",\n";
+    stream << "    \"deltanet_state_l2\": [";
+    for (std::size_t index = 0; index < probe.deltanet_state_l2.size(); ++index) {
+        if (index > 0) {
+            stream << ", ";
+        }
+        stream << probe.deltanet_state_l2[index];
+    }
+    stream << "]\n";
+    stream << "  },\n";
+    stream << "  \"timing\": {\n";
+    stream << "    \"wall_ms\": " << wall_ms << "\n";
+    stream << "  }\n";
+    stream << "}\n";
+    return stream.str();
+}
+
 InferenceRunResult RunFullGpuInference(const soc::gpu::MetalContext& context,
                                        soc::gpu::PipelineCache* pipeline_cache,
                                        soc::gpu::BufferArena* temporary_arena,
@@ -577,8 +741,13 @@ std::shared_ptr<soc::gpu::ModelRunner> CreateGpuRunnerForSelection(const soc::gp
             }
             return std::make_shared<soc::gpu::models::qwen3::Qwen3Runner>(std::move(gpu_model));
         }
-        case soc::gpu::ModelArchitecture::kQwen3_5:
-            break;
+        case soc::gpu::ModelArchitecture::kQwen3_5: {
+            soc::gpu::models::qwen3_5::Qwen3_5Runner runner(soc::gpu::models::qwen3_5::BuildQwen3_5_9BReferenceSpec());
+            if (!soc::gpu::models::qwen3_5::LoadGpuModelFromFile(context, manifest_path, &runner, error_message)) {
+                return nullptr;
+            }
+            return std::make_shared<soc::gpu::models::qwen3_5::Qwen3_5Runner>(std::move(runner));
+        }
         case soc::gpu::ModelArchitecture::kUnknown:
             break;
     }
@@ -594,14 +763,16 @@ InferenceRunResult RunFullCpuInference(const QwenCausalLM& cpu_model,
                                        const std::string& prepared_prompt,
                                        const TokenizerRuntimeData& tokenizer_runtime) {
     InferenceRunResult run;
+    const std::size_t prompt_token_count = TokenizerRuntime(tokenizer_runtime).Encode(prepared_prompt).size();
+    const std::size_t effective_max_new_tokens = ResolveEffectiveMaxNewTokens(prompt_token_count, generation);
     const std::size_t sequence_capacity = std::max<std::size_t>(generation.max_sequence_length,
-                                                                TokenizerRuntime(tokenizer_runtime).Encode(prepared_prompt).size() + generation.max_new_tokens + 8);
+                                                                prompt_token_count + effective_max_new_tokens + 8);
     ::GenerationSession session(cpu_model,
                                 TokenizerRuntime(tokenizer_runtime),
                                 ::Sampler(soc::gpu::ToCpuSamplerConfig(generation.sampler)),
                                 sequence_capacity);
     const Clock::time_point start_time = Clock::now();
-    const GenerationResult result = session.Generate(prepared_prompt, generation.max_new_tokens, generation.eos_token_id);
+    const GenerationResult result = session.Generate(prepared_prompt, effective_max_new_tokens, generation.eos_token_id);
     run.wall_ms = DurationMilliseconds(start_time, Clock::now());
     run.generated_token_ids = result.generated_token_ids;
     run.generated_text = result.generated_text;
@@ -619,8 +790,9 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
                                       const TokenizerRuntimeData& tokenizer_runtime,
                                       std::string* error_message) {
     InferenceRunResult run;
+    const std::size_t effective_max_new_tokens = ResolveEffectiveMaxNewTokens(prompt_token_ids.size(), generation);
     const std::size_t sequence_capacity = std::max<std::size_t>(generation.max_sequence_length,
-                                                                prompt_token_ids.size() + generation.max_new_tokens + 8);
+                                                                prompt_token_ids.size() + effective_max_new_tokens + 8);
     auto gpu_cache = soc::gpu::KVCache::CreateShared(context,
                                                      gpu_model.num_layers(),
                                                      gpu_model.num_key_value_heads(),
@@ -636,7 +808,7 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
 
     const Clock::time_point start_time = Clock::now();
     context.ResetProfiling();
-    if (generation.max_new_tokens == 0) {
+    if (effective_max_new_tokens == 0) {
         run.wall_ms = DurationMilliseconds(start_time, Clock::now());
         run.gpu_ms = 0.0;
         run.profile = {};
@@ -693,7 +865,7 @@ InferenceRunResult RunHybridInference(const soc::gpu::MetalContext& context,
 
     std::vector<int> running_token_ids = prompt_token_ids;
     running_token_ids.push_back(next_token_id);
-    for (std::size_t step = 1; step < generation.max_new_tokens; ++step) {
+    for (std::size_t step = 1; step < effective_max_new_tokens; ++step) {
         if (generation.eos_token_id >= 0 && running_token_ids.back() == generation.eos_token_id) {
             break;
         }
@@ -956,8 +1128,9 @@ void PrintVerboseSummary(const soc::gpu::InferCliOptions& options,
 
 int main(int argc, char** argv) {
     try {
-        const soc::gpu::InferCliOptions options = ParseArgs(argc, argv);
-        const std::string prompt_text = ResolvePromptText(options);
+        soc::gpu::InferCliOptions options = ParseArgs(argc, argv);
+        const std::string prompt_text = options.validate_only ? std::string() : ResolvePromptText(options);
+        const Clock::time_point start_time = Clock::now();
 
         const soc::gpu::ManifestData gpu_manifest = soc::gpu::ManifestLoader::LoadFromFile(options.manifest_path);
         std::string error_message;
@@ -965,13 +1138,23 @@ int main(int argc, char** argv) {
         if (!soc::gpu::ResolveModelSelection(gpu_manifest, options.model_type, &model_selection, &error_message)) {
             throw std::runtime_error(error_message);
         }
+        if (model_selection.registry_name == "qwen3_5") {
+            options.prompt_options.apply_chat_template = true;
+            if (!options.override_enable_thinking) {
+                options.prompt_options.enable_thinking = false;
+            }
+        }
         const ManifestData manifest = ManifestLoader::LoadFromFile(options.manifest_path);
         const ExecutionPlan plan = ResolveExecutionPlan(options, manifest);
         const TokenizerRuntimeData tokenizer_runtime = TokenizerRuntimeLoader::LoadFromFile(manifest.tokenizer_runtime_file);
         const soc::gpu::RuntimeGenerationOptions generation = soc::gpu::ResolveGenerationOptions(options, manifest);
-        const std::string prepared_prompt = RuntimePipeline::PreparePrompt(tokenizer_runtime, prompt_text, soc::gpu::ToCpuRuntimePromptOptions(options.prompt_options));
+        const std::string prepared_prompt =
+            options.validate_only ? std::string() :
+                                    RuntimePipeline::PreparePrompt(tokenizer_runtime,
+                                                                   prompt_text,
+                                                                   soc::gpu::ToCpuRuntimePromptOptions(options.prompt_options));
         const TokenizerRuntime tokenizer(tokenizer_runtime);
-        const std::vector<int> prompt_token_ids = tokenizer.Encode(prepared_prompt);
+        const std::vector<int> prompt_token_ids = options.validate_only ? std::vector<int>() : tokenizer.Encode(prepared_prompt);
         if ((!options.prompt_cache_artifact_save.empty() || !options.prompt_cache_artifact_load.empty()) && plan.mode != "full-gpu") {
             throw std::runtime_error("prompt cache artifacts are only supported in full-gpu mode");
         }
@@ -992,6 +1175,77 @@ int main(int argc, char** argv) {
         if (temporary_arena == nullptr) {
             std::cerr << "failed to create temporary arena: " << error_message << '\n';
             return 1;
+        }
+
+        if (options.validate_only) {
+            auto gpu_runner = CreateGpuRunnerForSelection(model_selection, *context, options.manifest_path, &error_message);
+            if (gpu_runner == nullptr) {
+                std::cerr << "failed to load GPU model: " << error_message << '\n';
+                return 1;
+            }
+            const double wall_ms = DurationMilliseconds(start_time, Clock::now());
+            WritePrimaryOutput(options,
+                               BuildValidationOutput(options,
+                                                     model_selection,
+                                                     manifest,
+                                                     tokenizer_runtime,
+                                                     *gpu_runner,
+                                                     context->GetDeviceInfo(),
+                                                     wall_ms));
+            return 0;
+        }
+
+        if (!options.qwen3_5_boundary_probe_output.empty()) {
+            if (model_selection.registry_name != "qwen3_5") {
+                throw std::runtime_error("--qwen3_5-boundary-probe is only supported for model type qwen3_5");
+            }
+            auto gpu_runner = CreateGpuRunnerForSelection(model_selection, *context, options.manifest_path, &error_message);
+            if (gpu_runner == nullptr) {
+                std::cerr << "failed to load GPU model: " << error_message << '\n';
+                return 1;
+            }
+            const auto* qwen3_5_runner = dynamic_cast<const soc::gpu::models::qwen3_5::Qwen3_5Runner*>(gpu_runner.get());
+            if (qwen3_5_runner == nullptr) {
+                throw std::runtime_error("selected qwen3_5 runner does not support boundary probe");
+            }
+            soc::gpu::models::qwen3_5::Qwen3_5BoundaryProbe probe;
+            std::vector<int32_t> prompt_token_ids_i32(prompt_token_ids.begin(), prompt_token_ids.end());
+            if (!qwen3_5_runner->DebugBoundaryProbe(*context,
+                                                    &pipeline_cache,
+                                                    temporary_arena.get(),
+                                                    prompt_token_ids_i32,
+                                                    8,
+                                                    &probe,
+                                                    &error_message)) {
+                std::cerr << "boundary probe failed: " << error_message << '\n';
+                return 1;
+            }
+            const double wall_ms = DurationMilliseconds(start_time, Clock::now());
+            const std::string payload =
+                BuildQwen3_5BoundaryProbeOutput(options,
+                                               prompt_text,
+                                               prepared_prompt,
+                                               prompt_token_ids,
+                                               probe,
+                                               context->GetDeviceInfo(),
+                                               wall_ms);
+            std::filesystem::path output_path(options.qwen3_5_boundary_probe_output);
+            std::error_code create_error;
+            if (output_path.has_parent_path()) {
+                std::filesystem::create_directories(output_path.parent_path(), create_error);
+            }
+            if (create_error) {
+                throw std::runtime_error("failed to create boundary probe output directory: " + create_error.message());
+            }
+            std::ofstream output(output_path);
+            if (!output) {
+                throw std::runtime_error("failed to open boundary probe output file: " + options.qwen3_5_boundary_probe_output);
+            }
+            output << payload;
+            if (options.json_output) {
+                std::cout << payload;
+            }
+            return 0;
         }
 
         InferenceRunResult run;
