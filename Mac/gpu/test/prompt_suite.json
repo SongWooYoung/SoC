@@ -1,0 +1,22 @@
+[
+  {"id": "short_01", "kind": "short", "prompt_text": "Hello there."},
+  {"id": "short_02", "kind": "short", "prompt_text": "What is 2+2?"},
+  {"id": "short_03", "kind": "short", "prompt_text": "Summarize the purpose of a KV cache."},
+  {"id": "short_04", "kind": "short", "prompt_text": "Write one sentence about spring rain."},
+  {"id": "short_05", "kind": "short", "prompt_text": "Explain overfitting in plain language."},
+  {"id": "short_06", "kind": "short", "prompt_text": "Give a short recipe for iced coffee."},
+  {"id": "short_07", "kind": "short", "prompt_text": "Translate 'good morning' into Korean."},
+  {"id": "short_08", "kind": "short", "prompt_text": "Name three planets in our solar system."},
+  {"id": "short_09", "kind": "short", "prompt_text": "Write a haiku about the moon."},
+  {"id": "short_10", "kind": "short", "prompt_text": "What does latency mean in computing?"},
+  {"id": "long_01", "kind": "long", "prompt_text": "You are helping a beginner learn machine learning. Explain the difference between training loss and validation loss, why they matter, and how someone should react when validation loss gets worse while training loss keeps improving. Keep the explanation practical and beginner friendly."},
+  {"id": "long_02", "kind": "long", "prompt_text": "Write a warm but concise email to a teammate who missed a deadline. Ask what blocked them, propose a new plan for the week, and keep the tone supportive rather than accusatory."},
+  {"id": "long_03", "kind": "long", "prompt_text": "Describe how a GPU inference engine typically processes a prompt and then decodes new tokens. Include the roles of prefill, KV cache, and decode steps, but keep the explanation readable for an engineer who is not a specialist in LLM serving."},
+  {"id": "long_04", "kind": "long", "prompt_text": "Compare breadth-first search and depth-first search. Explain how each one works, what memory tradeoffs they have, and give a concrete example of when one is a better choice than the other."},
+  {"id": "long_05", "kind": "long", "prompt_text": "I need a short weekend travel plan for Kyoto. Suggest a simple two-day itinerary with food, one cultural site, one quiet place to relax, and one practical tip for getting around."},
+  {"id": "long_06", "kind": "long", "prompt_text": "Explain what a database index is, how it speeds up reads, why it can make writes slower, and how an engineer should decide whether an index is worth adding."},
+  {"id": "long_07", "kind": "long", "prompt_text": "Write a short story about a programmer staying late in the office to fix a mysterious bug, only to discover that the real issue was a tiny assumption hidden in an old utility function."},
+  {"id": "long_08", "kind": "long", "prompt_text": "Give practical advice for improving sleep quality without medication. Mention bedtime routine, light exposure, caffeine timing, and what to do if someone wakes up in the middle of the night."},
+  {"id": "long_09", "kind": "long", "prompt_text": "Explain residual connections in transformer-style models. Describe why they help optimization, what would happen if they were removed, and how they interact with normalization layers."},
+  {"id": "long_10", "kind": "long", "prompt_text": "Write a concise technical note about why reproducibility can be difficult in machine learning experiments. Mention random seeds, floating point behavior, hardware differences, data order, and software version drift."}
+]

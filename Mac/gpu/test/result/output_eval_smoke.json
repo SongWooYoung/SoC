@@ -1,0 +1,109 @@
+{
+  "model_dir": "/Volumes/990pro/Documents/SoC/models/raw/qwen3_5-4b",
+  "prompt_suite": "/tmp/qwen3_5_output_eval_smoke.json",
+  "max_new_tokens": 32,
+  "summary": {
+    "rows": 1,
+    "prepared_prompt_match_count": 1,
+    "output_text_match_count": 1,
+    "generated_tokens_match_count": 1,
+    "base_avg_prefill_ms": 1402.264,
+    "cpp_avg_prefill_ms": 7117.865,
+    "base_avg_decode_ms": 193.033,
+    "cpp_avg_decode_ms": 659.806,
+    "base_avg_wall_ms": 1930.332,
+    "cpp_avg_wall_ms": 13716.057,
+    "base_avg_throughput": 5.18,
+    "cpp_avg_throughput": 0.729
+  },
+  "rows": [
+    {
+      "id": "smoke_01",
+      "kind": "short",
+      "prompt_text": "Hello there.",
+      "prompt_tokens_match": true,
+      "generated_tokens_match": true,
+      "output_text_match": true,
+      "base": {
+        "id": "smoke_01",
+        "kind": "short",
+        "prompt_text": "Hello there.",
+        "prompt_tokens": [
+          248045,
+          846,
+          198,
+          9419,
+          1017,
+          13,
+          248046,
+          198,
+          248045,
+          74455,
+          198,
+          248068,
+          271,
+          248069,
+          271
+        ],
+        "generated_tokens": [
+          9419,
+          0,
+          2500,
+          628,
+          353,
+          1438,
+          488,
+          3242,
+          30,
+          248046
+        ],
+        "generated_token_count": 10,
+        "output_text": "Hello! How can I help you today?<|im_end|>",
+        "prefill_ms": 1402.264,
+        "decode_ms": 193.033,
+        "wall_ms": 1930.332,
+        "throughput": 5.18
+      },
+      "cpp": {
+        "id": "smoke_01",
+        "kind": "short",
+        "prompt_text": "Hello there.",
+        "prompt_tokens": [
+          248045,
+          846,
+          198,
+          9419,
+          1017,
+          13,
+          248046,
+          198,
+          248045,
+          74455,
+          198,
+          248068,
+          271,
+          248069,
+          271
+        ],
+        "generated_tokens": [
+          9419,
+          0,
+          2500,
+          628,
+          353,
+          1438,
+          488,
+          3242,
+          30,
+          248046
+        ],
+        "generated_token_count": 10,
+        "output_text": "Hello! How can I help you today?<|im_end|>",
+        "prefill_ms": 7117.865,
+        "decode_ms": 659.806,
+        "wall_ms": 13716.057,
+        "throughput": 0.729
+      }
+    }
+  ]
+}

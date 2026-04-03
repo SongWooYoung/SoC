@@ -70,8 +70,8 @@ C++ 구현의 출력이 Python(transformers) 구현과 일치하는지 확인하
 - baseline 성능 수치 기록 (표 형태)
 
 ## 상태
-- [ ] Python reference output 생성 스크립트 (gen_reference.py)
-- [ ] C++ 검증 도구 (test_validation.cpp)
-- [ ] token-level 일치 확인
-- [ ] logits-level 비교
-- [ ] baseline 성능 수치 기록
+- [X] Python reference output 생성 스크립트 (gen_reference.py)
+- [X] C++ 검증 도구 (test_validation.cpp)
+- [-] token-level 일치 확인
+- [-] logits-level 비교
+- [-] baseline 성능 수치 기록
