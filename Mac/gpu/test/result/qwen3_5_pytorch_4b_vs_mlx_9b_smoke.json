@@ -1,0 +1,66 @@
+{
+  "generated_at": "2026-04-04T19:26:45",
+  "prompt_suite": "/Volumes/990pro/Documents/SoC/Mac/gpu/test/prompt_suite.json",
+  "max_new_tokens": 64,
+  "base_model": {
+    "label": "qwen3_5_4b_pytorch",
+    "backend": "transformers",
+    "model_dir": "/Volumes/990pro/Documents/SoC/models/raw/qwen3_5-4b",
+    "summary": {
+      "rows": 1,
+      "avg_prompt_tokens": 15.0,
+      "avg_generated_tokens": 10.0,
+      "avg_prefill_ms": 1454.39,
+      "avg_decode_ms": 140.341,
+      "avg_wall_ms": 2857.802,
+      "avg_throughput": 3.499,
+      "avg_peak_memory_gb": 7.909
+    }
+  },
+  "candidate_model": {
+    "label": "qwen3_5_9b_mlx_8bit",
+    "backend": "mlx_vlm",
+    "model_dir": "/Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit",
+    "summary": {
+      "rows": 1,
+      "avg_prompt_tokens": 15.0,
+      "avg_generated_tokens": 10.0,
+      "avg_prefill_ms": 1225.463,
+      "avg_decode_ms": 82.122,
+      "avg_wall_ms": 2046.683,
+      "avg_throughput": 4.886,
+      "avg_peak_memory_gb": 10.495
+    }
+  },
+  "summary_delta": {
+    "rows": 1,
+    "avg_prefill_ms_delta": -228.927,
+    "avg_decode_ms_delta": -58.219,
+    "avg_wall_ms_delta": -811.119,
+    "avg_throughput_delta": 1.387,
+    "avg_peak_memory_gb_delta": 2.586,
+    "exact_output_matches": 0
+  },
+  "prompt_comparisons": [
+    {
+      "id": "short_01",
+      "kind": "short",
+      "prompt_text": "Hello there.",
+      "base_prefill_ms": 1454.39,
+      "candidate_prefill_ms": 1225.463,
+      "prefill_ms_delta": -228.927,
+      "base_decode_ms": 140.341,
+      "candidate_decode_ms": 82.122,
+      "decode_ms_delta": -58.219,
+      "base_wall_ms": 2857.802,
+      "candidate_wall_ms": 2046.683,
+      "wall_ms_delta": -811.119,
+      "base_throughput": 3.499,
+      "candidate_throughput": 4.886,
+      "throughput_delta": 1.387,
+      "base_output_text": "Hello! How can I help you today?<|im_end|>",
+      "candidate_output_text": "Hello! How can I help you today?",
+      "exact_output_match": false
+    }
+  ]
+}

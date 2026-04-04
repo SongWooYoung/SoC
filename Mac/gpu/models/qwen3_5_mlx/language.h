@@ -178,9 +178,9 @@ struct RMSNormGated {
 };
 
 struct MLP {
-	mx::array gate_proj_w = scalar_array();
-	mx::array up_proj_w = scalar_array();
-	mx::array down_proj_w = scalar_array();
+	mlx_helpers::TensorParam gate_proj_w;
+	mlx_helpers::TensorParam up_proj_w;
+	mlx_helpers::TensorParam down_proj_w;
 
 	mx::array forward(const mx::array& x) const {
 		auto gate = mlx_helpers::linear(x, gate_proj_w);
@@ -195,10 +195,10 @@ struct Attention {
 	int head_dim = 0;
 	float scale = 1.0f;
 	float norm_eps = 1e-6f;
-	mx::array q_proj_w = scalar_array();
-	mx::array k_proj_w = scalar_array();
-	mx::array v_proj_w = scalar_array();
-	mx::array o_proj_w = scalar_array();
+	mlx_helpers::TensorParam q_proj_w;
+	mlx_helpers::TensorParam k_proj_w;
+	mlx_helpers::TensorParam v_proj_w;
+	mlx_helpers::TensorParam o_proj_w;
 	mx::array q_norm_w = scalar_array(1.0f);
 	mx::array k_norm_w = scalar_array(1.0f);
 	RotaryEmbedding rope;
@@ -258,14 +258,14 @@ struct GatedDeltaNet {
 	float norm_eps = 1e-6f;
 
 	mx::array conv1d_w = scalar_array();
-	mx::array in_proj_qkv_w = scalar_array();
-	mx::array in_proj_z_w = scalar_array();
-	mx::array in_proj_b_w = scalar_array();
-	mx::array in_proj_a_w = scalar_array();
+	mlx_helpers::TensorParam in_proj_qkv_w;
+	mlx_helpers::TensorParam in_proj_z_w;
+	mlx_helpers::TensorParam in_proj_b_w;
+	mlx_helpers::TensorParam in_proj_a_w;
 	mx::array dt_bias = scalar_array();
 	mx::array A_log = scalar_array();
 	mx::array norm_w = scalar_array(1.0f);
-	mx::array out_proj_w = scalar_array();
+	mlx_helpers::TensorParam out_proj_w;
 
 	mx::array forward(
 		const mx::array& inputs,
@@ -341,7 +341,7 @@ struct DecoderLayer {
 
 struct Qwen3_5Model {
 	Qwen3_5TextConfig config;
-	mx::array embed_w = scalar_array();
+	mlx_helpers::TensorParam embed_w;
 	std::vector<DecoderLayer> layers;
 	mx::array norm_w = scalar_array(1.0f);
 	float norm_eps = 1e-6f;
@@ -371,7 +371,7 @@ struct LanguageModel {
 	Qwen3_5TextConfig config;
 	std::optional<Qwen3_5Config> model_config;
 	Qwen3_5Model model;
-	std::optional<mx::array> lm_head_w;
+	std::optional<mlx_helpers::TensorParam> lm_head_w;
 
 	LanguageModel() = default;
 
@@ -538,7 +538,7 @@ struct LanguageModel {
 
 		auto hidden = model.forward(input_ids, cache, attention_mask, pos, inputs_embeds);
 		if (config.tie_word_embeddings || !lm_head_w.has_value()) {
-			return mx::matmul(hidden, mx::transpose(model.embed_w));
+			return mlx_helpers::linear(hidden, model.embed_w);
 		}
 		return mlx_helpers::linear(hidden, *lm_head_w);
 	}

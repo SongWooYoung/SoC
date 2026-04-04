@@ -464,7 +464,18 @@ private:
         // Merges
         const auto& merges = model.at("merges").as_array();
         for (size_t i = 0; i < merges.size(); i++) {
-            const std::string& merge_str = merges[i].as_string();
+            std::string merge_str;
+            if (merges[i].is_string()) {
+                merge_str = merges[i].as_string();
+            } else if (merges[i].is_array()) {
+                const auto& pair = merges[i].as_array();
+                if (pair.size() != 2 || !pair[0].is_string() || !pair[1].is_string()) {
+                    throw std::runtime_error("Unsupported tokenizer merge pair format");
+                }
+                merge_str = pair[0].as_string() + " " + pair[1].as_string();
+            } else {
+                throw std::runtime_error("Unsupported tokenizer merges entry type");
+            }
             merge_ranks_[merge_str] = static_cast<int>(i);
         }
 

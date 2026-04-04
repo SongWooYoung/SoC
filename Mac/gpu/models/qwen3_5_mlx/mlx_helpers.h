@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <optional>
+#include <string>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
@@ -12,6 +13,43 @@ namespace qwen3_5_mlx {
 namespace mx = mlx::core;
 
 namespace mlx_helpers {
+
+struct TensorParam {
+    mx::array weight = mx::array(0.0f);
+    std::optional<mx::array> scales;
+    std::optional<mx::array> biases;
+    int group_size = 64;
+    int bits = 8;
+    std::string mode = "affine";
+
+    TensorParam() = default;
+    TensorParam(const mx::array& dense_weight) : weight(dense_weight) {}
+    TensorParam(mx::array&& dense_weight) : weight(std::move(dense_weight)) {}
+
+    TensorParam& operator=(const mx::array& dense_weight) {
+        weight = dense_weight;
+        scales.reset();
+        biases.reset();
+        group_size = 64;
+        bits = 8;
+        mode = "affine";
+        return *this;
+    }
+
+    TensorParam& operator=(mx::array&& dense_weight) {
+        weight = std::move(dense_weight);
+        scales.reset();
+        biases.reset();
+        group_size = 64;
+        bits = 8;
+        mode = "affine";
+        return *this;
+    }
+
+    bool is_quantized() const {
+        return scales.has_value();
+    }
+};
 
 inline mx::array silu(const mx::array& x) {
     return x * mx::sigmoid(x);
@@ -36,8 +74,49 @@ inline mx::array linear(
     return out;
 }
 
+inline mx::array linear(
+    const mx::array& x,
+    const TensorParam& weight,
+    const std::optional<mx::array>& bias = std::nullopt) {
+    auto out = weight.is_quantized()
+        ? mx::quantized_matmul(
+            x,
+            weight.weight,
+            *weight.scales,
+            weight.biases,
+            true,
+            weight.group_size,
+            weight.bits,
+            weight.mode)
+        : mx::matmul(x, mx::transpose(weight.weight));
+    if (bias.has_value()) {
+        out = out + *bias;
+    }
+    return out;
+}
+
 inline mx::array embedding(const mx::array& weight, const mx::array& indices) {
     return mx::take(weight, indices, 0);
+}
+
+inline mx::array embedding(const TensorParam& weight, const mx::array& indices) {
+    if (!weight.is_quantized()) {
+        return mx::take(weight.weight, indices, 0);
+    }
+
+    auto gathered_weight = mx::take(weight.weight, indices, 0);
+    auto gathered_scales = mx::take(*weight.scales, indices, 0);
+    std::optional<mx::array> gathered_biases = std::nullopt;
+    if (weight.biases.has_value()) {
+        gathered_biases = mx::take(*weight.biases, indices, 0);
+    }
+    return mx::dequantize(
+        gathered_weight,
+        gathered_scales,
+        gathered_biases,
+        weight.group_size,
+        weight.bits,
+        weight.mode);
 }
 
 inline mx::array rotate_half(const mx::array& x) {

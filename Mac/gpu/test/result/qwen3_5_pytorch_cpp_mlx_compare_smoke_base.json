@@ -1,0 +1,46 @@
+{
+  "mode": "pytorch",
+  "model_dir": "/Volumes/990pro/Documents/SoC/models/raw/qwen3_5-4b",
+  "rows": [
+    {
+      "id": "short_01",
+      "kind": "short",
+      "prompt_text": "Hello there.",
+      "prompt_tokens": [
+        248045,
+        846,
+        198,
+        9419,
+        1017,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ],
+      "generated_tokens": [
+        9419,
+        0,
+        2500,
+        628,
+        353,
+        1438,
+        488,
+        3242,
+        30,
+        248046
+      ],
+      "generated_token_count": 10,
+      "output_text": "Hello! How can I help you today?<|im_end|>",
+      "prefill_ms": 1242.838,
+      "decode_ms": 132.029,
+      "wall_ms": 2563.126,
+      "throughput": 3.901
+    }
+  ]
+}

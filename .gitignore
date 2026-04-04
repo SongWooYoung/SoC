@@ -29,3 +29,5 @@ Mac/gpu/reports/
 
 .venv/
 **/.venv/
+
+**/.repo_cache
