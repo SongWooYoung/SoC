@@ -1,8 +1,15 @@
-# Phase 5: 최적화 실험 (EXP-1 ~ EXP-7)
+# Apple Silicon 최적화 전략 (M4 Mac mini, 32GB)
 
 ## 목표
 Phase 4에서 확정한 baseline 대비 성능을 개선한다.
+타겟 하드웨어: Apple M4 Mac mini (32GB unified memory)
 각 실험은 독립적으로 진행하며, baseline 대비 성능 차이를 측정하여 채택 여부를 결정한다.
+
+## 현재 baseline (py_cpp, Qwen3.5-4B, CPU Accelerate)
+- prefill: ~1100ms (20 tokens)
+- decode: ~580ms/tok
+- throughput: ~1.7 tok/s
+- Python (transformers, MPS): ~7 tok/s
 
 ## 실험 관리
 - 각 실험은 독립 브랜치 또는 컴파일 플래그로 관리

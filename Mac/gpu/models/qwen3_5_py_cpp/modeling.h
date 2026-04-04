@@ -6,7 +6,7 @@
 // All computation is f32 on CPU (Accelerate/BLAS).
 // Weights stay mmap'd as bf16, converted on-the-fly per operation.
 
-#include "models/qwen3_5/config.h"
+#include "models/qwen3_5_py_cpp/config.h"
 #include "utils/ops.h"
 #include "utils/safetensors.h"
 

@@ -23,6 +23,48 @@ import numpy as np
 import torch
 
 
+IM_START = 248045
+IM_END = 248046
+THINK = 248068
+THINK_END = 248069
+
+
+def build_nothink_chatml_text(user_message: str, system_message: str | None = None) -> str:
+    parts: list[str] = []
+    if system_message:
+        parts.append(f"<|im_start|>system\n{system_message}<|im_end|>\n")
+    parts.append(f"<|im_start|>user\n{user_message}<|im_end|>\n")
+    parts.append("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+    return "".join(parts)
+
+
+def build_nothink_chatml_tokens(tokenizer, user_message: str, system_message: str | None = None) -> list[int]:
+    ids: list[int] = []
+    newline = tokenizer.encode("\n", add_special_tokens=False)
+    double_newline = tokenizer.encode("\n\n", add_special_tokens=False)
+
+    def append_role(role: str, content: str) -> None:
+        ids.append(IM_START)
+        ids.extend(tokenizer.encode(role, add_special_tokens=False))
+        ids.extend(newline)
+        ids.extend(tokenizer.encode(content, add_special_tokens=False))
+        ids.append(IM_END)
+        ids.extend(newline)
+
+    if system_message:
+        append_role("system", system_message)
+
+    append_role("user", user_message)
+    ids.append(IM_START)
+    ids.extend(tokenizer.encode("assistant", add_special_tokens=False))
+    ids.extend(newline)
+    ids.append(THINK)
+    ids.extend(double_newline)
+    ids.append(THINK_END)
+    ids.extend(double_newline)
+    return ids
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-dir", required=True, help="Path to model directory")
@@ -48,25 +90,8 @@ def main():
     results = []
 
     for prompt_text in prompts:
-        messages = [{"role": "user", "content": prompt_text}]
-
-        # Apply chat template with enable_thinking=False
-        templated = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=False,
-        )
-        prompt_ids = tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            enable_thinking=False,
-            return_dict=False,
-        )
-        # Ensure it's a flat list of ints
-        if isinstance(prompt_ids, dict):
-            prompt_ids = prompt_ids["input_ids"]
+        templated = build_nothink_chatml_text(prompt_text)
+        prompt_ids = build_nothink_chatml_tokens(tokenizer, prompt_text)
 
         print(f"\nPrompt: {prompt_text!r}", file=sys.stderr)
         print(f"  Templated: {templated!r}", file=sys.stderr)

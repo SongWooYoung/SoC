@@ -1,5 +1,5 @@
-#include "models/qwen3_5/modeling.h"
-#include "models/qwen3_5/tokenization.h"
+#include "models/qwen3_5_py_cpp/modeling.h"
+#include "models/qwen3_5_py_cpp/tokenization.h"
 #include "utils/json.h"
 
 #include <algorithm>

@@ -2,7 +2,7 @@
 // Usage: ./test_vision <model_dir>
 // model_dir should contain config.json and model.safetensors-*.safetensors
 
-#include "models/qwen3_5/vision.h"
+#include "models/qwen3_5_py_cpp/vision.h"
 
 #include <chrono>
 #include <cmath>

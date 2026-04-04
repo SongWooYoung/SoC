@@ -1,4 +1,4 @@
-#include "../models/qwen3_5/config.h"
+#include "../models/qwen3_5_py_cpp/config.h"
 
 #include <cassert>
 #include <cmath>

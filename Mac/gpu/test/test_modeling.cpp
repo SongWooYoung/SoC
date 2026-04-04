@@ -2,8 +2,8 @@
 // Usage: ./test_modeling <model_dir>
 // model_dir should contain config.json and model.safetensors-*.safetensors
 
-#include "models/qwen3_5/modeling.h"
-#include "models/qwen3_5/tokenization.h"
+#include "models/qwen3_5_py_cpp/modeling.h"
+#include "models/qwen3_5_py_cpp/tokenization.h"
 
 #include <chrono>
 #include <cstdio>

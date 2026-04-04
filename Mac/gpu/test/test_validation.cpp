@@ -7,8 +7,8 @@
 //   2. Full token sequence (greedy generation)
 //   3. Performance timing
 
-#include "models/qwen3_5/modeling.h"
-#include "models/qwen3_5/tokenization.h"
+#include "models/qwen3_5_py_cpp/modeling.h"
+#include "models/qwen3_5_py_cpp/tokenization.h"
 #include "utils/json.h"
 
 #include <chrono>
@@ -30,7 +30,9 @@ static int fail_count = 0;
     } while (0)
 
 // ── Chat template: non-thinking mode ─────────────────────────────────
-// <|im_start|>user\n{message}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n
+// <|im_start|>system\n{system_message}<|im_end|>\n (optional)
+// <|im_start|>user\n{message}<|im_end|>\n
+// <|im_start|>assistant\n<think>\n\n</think>\n\n
 std::vector<int> apply_chat_template_nothink(
     const std::string& user_message,
     const Qwen3_5Tokenizer& tokenizer)
@@ -41,12 +43,13 @@ std::vector<int> apply_chat_template_nothink(
     const int THINK     = 248068;
     const int THINK_END = 248069;
 
-    // Encode "user", "\n", message, "assistant", "\n\n"
-    auto user_tok      = tokenizer.encode("user");
+    // Encode role strings and separators explicitly rather than relying on a
+    // tokenizer-side chat template. The MLX export may not ship one.
+    auto user_tok       = tokenizer.encode("user");
     auto newline_tok    = tokenizer.encode("\n");
-    auto msg_tok       = tokenizer.encode(user_message);
-    auto assistant_tok = tokenizer.encode("assistant");
-    auto dbl_nl_tok    = tokenizer.encode("\n\n");
+    auto msg_tok        = tokenizer.encode(user_message);
+    auto assistant_tok  = tokenizer.encode("assistant");
+    auto dbl_nl_tok     = tokenizer.encode("\n\n");
 
     std::vector<int> ids;
     ids.push_back(IM_START);

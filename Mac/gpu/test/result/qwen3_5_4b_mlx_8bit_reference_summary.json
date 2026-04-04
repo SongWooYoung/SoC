@@ -1,0 +1,37 @@
+{
+  "generated_at": "2026-04-04T18:34:57",
+  "model_dir": "/Volumes/990pro/Documents/SoC/models/raw/qwen3_5-4b-mlx-8bit",
+  "prompt_suite": "/Volumes/990pro/Documents/SoC/Mac/gpu/test/prompt_suite.json",
+  "max_new_tokens": 64,
+  "system_message": null,
+  "overall": {
+    "rows": 20,
+    "avg_prompt_tokens": 34.85,
+    "avg_generated_tokens": 53.45,
+    "avg_prefill_ms": 174.551,
+    "avg_decode_ms": 47.298,
+    "avg_wall_ms": 2723.919,
+    "avg_throughput": 19.207,
+    "avg_peak_memory_gb": 5.27
+  },
+  "short": {
+    "rows": 10,
+    "avg_prompt_tokens": 19.6,
+    "avg_generated_tokens": 42.9,
+    "avg_prefill_ms": 135.181,
+    "avg_decode_ms": 46.697,
+    "avg_wall_ms": 2168.451,
+    "avg_throughput": 18.894,
+    "avg_peak_memory_gb": 5.226
+  },
+  "long": {
+    "rows": 10,
+    "avg_prompt_tokens": 50.1,
+    "avg_generated_tokens": 64.0,
+    "avg_prefill_ms": 213.922,
+    "avg_decode_ms": 47.898,
+    "avg_wall_ms": 3279.386,
+    "avg_throughput": 19.52,
+    "avg_peak_memory_gb": 5.314
+  }
+}
