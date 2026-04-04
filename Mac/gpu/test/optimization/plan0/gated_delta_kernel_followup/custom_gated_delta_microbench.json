@@ -1,0 +1,12 @@
+{
+  "prefill_tokens": 64,
+  "iterations": 100,
+  "prefill": {
+    "ops": {"dispatch_ms": 0.267, "sync_ms": 14.664},
+    "compiled_ops": {"dispatch_ms": 0.235, "sync_ms": 9.619}
+  },
+  "decode": {
+    "ops": {"dispatch_ms": 0.007, "sync_ms": 0.474},
+    "compiled_ops": {"dispatch_ms": 0.006, "sync_ms": 0.405}
+  }
+}

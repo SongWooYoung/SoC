@@ -48,6 +48,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--system-message", default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--mlx-metal-path", type=Path, default=DEFAULT_MLX_METAL_PATH)
+    parser.add_argument("--custom-gated-delta-mode", choices=["ops", "compiled_ops", "metal_kernel"], default="metal_kernel")
+    parser.add_argument("--custom-linear-cache-mode", choices=["legacy", "arrays"], default="legacy")
+    parser.add_argument("--enable-custom-stage-trace", action="store_true")
     return parser.parse_args()
 
 
@@ -144,9 +147,15 @@ def run_custom_eval(
     output_path: Path,
     max_new_tokens: int,
     mlx_metal_path: Path,
+    gated_delta_mode: str,
+    linear_cache_mode: str,
+    trace_enabled: bool,
 ) -> dict[str, Any]:
     env = dict(os.environ)
     env["MLX_METAL_PATH"] = str(mlx_metal_path)
+    env["QWEN3_5_MLX_GATED_DELTA_MODE"] = gated_delta_mode
+    env["QWEN3_5_MLX_LINEAR_CACHE_MODE"] = linear_cache_mode
+    env["QWEN3_5_MLX_STAGE_TRACE"] = "1" if trace_enabled else "0"
     command = [str(binary), str(model_dir), str(prompt_suite), str(output_path), str(max_new_tokens)]
     subprocess.run(command, check=True, env=env)
     with output_path.open(encoding="utf-8") as handle:
@@ -161,6 +170,9 @@ def run_custom_eval(
         "label": "qwen3_5_9b_qwen3_5_mlx",
         "backend": "qwen3_5_mlx",
         "model_dir": str(model_dir),
+        "linear_cache_mode": result.get("linear_cache_mode", linear_cache_mode),
+        "gated_delta_mode": result.get("gated_delta_mode", gated_delta_mode),
+        "trace_enabled": result.get("trace_enabled", trace_enabled),
         "rows": rows,
         "summary": summarize_rows(rows),
     }
@@ -203,6 +215,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Prompt suite: {report['prompt_suite']}",
         f"- Model dir: {report['model_dir']}",
         f"- Max new tokens: {report['max_new_tokens']}",
+        f"- Custom gated_delta mode: {custom['gated_delta_mode']}",
+        f"- Custom linear cache mode: {custom['linear_cache_mode']}",
+        f"- Custom stage trace enabled: {custom['trace_enabled']}",
         "",
         "## Summary",
         "",
@@ -292,6 +307,9 @@ def main() -> None:
         output_path=custom_output,
         max_new_tokens=args.max_new_tokens,
         mlx_metal_path=args.mlx_metal_path,
+        gated_delta_mode=args.custom_gated_delta_mode,
+        linear_cache_mode=args.custom_linear_cache_mode,
+        trace_enabled=args.enable_custom_stage_trace,
     )
 
     prompt_comparisons = build_prompt_comparisons(mlx_library["rows"], custom["rows"])
@@ -310,6 +328,9 @@ def main() -> None:
             "label": custom["label"],
             "backend": custom["backend"],
             "model_dir": custom["model_dir"],
+            "linear_cache_mode": custom["linear_cache_mode"],
+            "gated_delta_mode": custom["gated_delta_mode"],
+            "trace_enabled": custom["trace_enabled"],
             "summary": custom["summary"],
         },
         "summary_delta": {

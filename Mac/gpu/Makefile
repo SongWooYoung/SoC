@@ -29,6 +29,9 @@ TEST_MLX_PHASE2_SRC = test/test_mlx_phase2.cpp
 TEST_OUTPUT_EVAL_SRC = test/test_output_eval.cpp
 TEST_MLX_OUTPUT_EVAL_SRC = test/test_mlx_output_eval.cpp
 TEST_MLX_QUANTIZED_OUTPUT_EVAL_SRC = test/test_mlx_quantized_output_eval.cpp
+TEST_MLX_LINEAR_ATTENTION_MICROBENCH_SRC = test/test_mlx_linear_attention_microbench.cpp
+TEST_MLX_QUANTIZED_PATH_BENCH_SRC = test/test_mlx_quantized_path_bench.cpp
+TEST_MLX_GATED_DELTA_MICROBENCH_SRC = test/test_mlx_gated_delta_microbench.cpp
 REFERENCE_JSON = test/reference.json
 PROMPT_SUITE_JSON = test/prompt_suite.json
 RESULT_DIR = test/result
@@ -37,9 +40,9 @@ OUTPUT_EVAL_TAG ?= suite
 OUTPUT_EVAL_MAX_NEW_TOKENS ?= 256
 OUTPUT_EVAL_JSON = $(RESULT_DIR)/output_eval_$(OUTPUT_EVAL_TAG).json
 
-.PHONY: all clean test test_config test_mlx_config test_mlx_api test_mlx_phase2 test_tokenizer test_modeling test_vision test_validation test_output_eval test_mlx_output_eval test_mlx_quantized_output_eval
+.PHONY: all clean test test_config test_mlx_config test_mlx_api test_mlx_phase2 test_tokenizer test_modeling test_vision test_validation test_output_eval test_mlx_output_eval test_mlx_quantized_output_eval test_mlx_linear_attention_microbench test_mlx_quantized_path_bench test_mlx_gated_delta_microbench
 
-all: $(BUILD_DIR)/test_config $(BUILD_DIR)/test_mlx_config $(BUILD_DIR)/test_mlx_api $(BUILD_DIR)/test_tokenizer $(BUILD_DIR)/test_modeling $(BUILD_DIR)/test_vision $(BUILD_DIR)/test_validation $(BUILD_DIR)/test_output_eval $(BUILD_DIR)/test_mlx_output_eval $(BUILD_DIR)/test_mlx_quantized_output_eval
+all: $(BUILD_DIR)/test_config $(BUILD_DIR)/test_mlx_config $(BUILD_DIR)/test_mlx_api $(BUILD_DIR)/test_tokenizer $(BUILD_DIR)/test_modeling $(BUILD_DIR)/test_vision $(BUILD_DIR)/test_validation $(BUILD_DIR)/test_output_eval $(BUILD_DIR)/test_mlx_output_eval $(BUILD_DIR)/test_mlx_quantized_output_eval $(BUILD_DIR)/test_mlx_linear_attention_microbench $(BUILD_DIR)/test_mlx_quantized_path_bench $(BUILD_DIR)/test_mlx_gated_delta_microbench
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -103,6 +106,15 @@ $(BUILD_DIR)/test_mlx_output_eval: $(TEST_MLX_OUTPUT_EVAL_SRC) $(JSON_SRC) | $(B
 $(BUILD_DIR)/test_mlx_quantized_output_eval: $(TEST_MLX_QUANTIZED_OUTPUT_EVAL_SRC) $(JSON_SRC) | $(BUILD_DIR)
 	$(CXX) $(MLX_CXXFLAGS) -I. $(TEST_MLX_QUANTIZED_OUTPUT_EVAL_SRC) $(JSON_SRC) -o $@ $(MLX_LDFLAGS)
 
+$(BUILD_DIR)/test_mlx_linear_attention_microbench: $(TEST_MLX_LINEAR_ATTENTION_MICROBENCH_SRC) $(JSON_SRC) | $(BUILD_DIR)
+	$(CXX) $(MLX_CXXFLAGS) -I. $(TEST_MLX_LINEAR_ATTENTION_MICROBENCH_SRC) $(JSON_SRC) -o $@ $(MLX_LDFLAGS)
+
+$(BUILD_DIR)/test_mlx_quantized_path_bench: $(TEST_MLX_QUANTIZED_PATH_BENCH_SRC) $(JSON_SRC) | $(BUILD_DIR)
+	$(CXX) $(MLX_CXXFLAGS) -I. $(TEST_MLX_QUANTIZED_PATH_BENCH_SRC) $(JSON_SRC) -o $@ $(MLX_LDFLAGS)
+
+$(BUILD_DIR)/test_mlx_gated_delta_microbench: $(TEST_MLX_GATED_DELTA_MICROBENCH_SRC) $(JSON_SRC) | $(BUILD_DIR)
+	$(CXX) $(MLX_CXXFLAGS) -I. $(TEST_MLX_GATED_DELTA_MICROBENCH_SRC) $(JSON_SRC) -o $@ $(MLX_LDFLAGS)
+
 test_output_eval: $(BUILD_DIR)/test_output_eval
 	mkdir -p $(RESULT_DIR)
 	$(PYTHON) test/output_eval_suite.py \
@@ -119,6 +131,15 @@ test_mlx_output_eval: $(BUILD_DIR)/test_mlx_output_eval
 test_mlx_quantized_output_eval: $(BUILD_DIR)/test_mlx_quantized_output_eval
 	mkdir -p $(RESULT_DIR)
 	MLX_METAL_PATH=$(MLX_ROOT)/build/mlx/backend/metal/kernels $(BUILD_DIR)/test_mlx_quantized_output_eval /Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit $(PROMPT_SUITE_JSON) $(RESULT_DIR)/mlx_quantized_output_eval.json 64
+
+test_mlx_linear_attention_microbench: $(BUILD_DIR)/test_mlx_linear_attention_microbench
+	$(BUILD_DIR)/test_mlx_linear_attention_microbench /Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit/config.json $(RESULT_DIR)/mlx_linear_attention_microbench.json
+
+test_mlx_quantized_path_bench: $(BUILD_DIR)/test_mlx_quantized_path_bench
+	$(BUILD_DIR)/test_mlx_quantized_path_bench /Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit/config.json $(RESULT_DIR)/mlx_quantized_path_bench.json
+
+test_mlx_gated_delta_microbench: $(BUILD_DIR)/test_mlx_gated_delta_microbench
+	$(BUILD_DIR)/test_mlx_gated_delta_microbench /Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit/config.json $(RESULT_DIR)/mlx_gated_delta_microbench.json
 
 clean:
 	rm -rf $(BUILD_DIR)

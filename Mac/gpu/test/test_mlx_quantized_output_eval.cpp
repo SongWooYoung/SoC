@@ -34,6 +34,14 @@ struct QuantizationConfig {
 
 using TensorMap = std::unordered_map<std::string, mx::array>;
 
+bool parse_bool_env(const char* value, bool default_value = false) {
+    if (value == nullptr) {
+        return default_value;
+    }
+    const std::string text(value);
+    return !(text == "0" || text == "false" || text == "off" || text == "no");
+}
+
 std::vector<int> apply_chat_template_nothink(
     const std::string& user_message,
     const Qwen3_5Tokenizer& tokenizer) {
@@ -104,6 +112,58 @@ std::string json_number(double value) {
     std::ostringstream out;
     out << std::fixed << std::setprecision(3) << value;
     return out.str();
+}
+
+std::string json_stage_map(
+    const std::unordered_map<std::string, qwen3_5_mlx::stage_trace::StageStats>& stage_map) {
+    std::vector<std::string> names;
+    names.reserve(stage_map.size());
+    for (const auto& [name, _stats] : stage_map) {
+        names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+
+    std::ostringstream out;
+    out << "{";
+    for (size_t index = 0; index < names.size(); ++index) {
+        const auto& name = names[index];
+        const auto& stats = stage_map.at(name);
+        if (index != 0) {
+            out << ", ";
+        }
+        out << "\"" << json_escape(name) << "\": {"
+            << "\"calls\": " << stats.calls << ", "
+            << "\"dispatch_ms\": " << json_number(stats.dispatch_ms) << ", "
+            << "\"sync_ms\": " << json_number(stats.sync_ms)
+            << "}";
+    }
+    out << "}";
+    return out.str();
+}
+
+std::string json_prompt_trace(const qwen3_5_mlx::stage_trace::PromptTrace& trace) {
+    std::ostringstream out;
+    out << "{\n";
+    out << "        \"prefill\": " << json_stage_map(trace.prefill) << ",\n";
+    out << "        \"decode\": " << json_stage_map(trace.decode) << "\n";
+    out << "      }";
+    return out.str();
+}
+
+int sample_argmax_with_trace(const mx::array& logits) {
+    using namespace qwen3_5_mlx::stage_trace;
+
+    mark_call("sampler_sync(argmax/item)");
+    auto dispatch_start = std::chrono::steady_clock::now();
+    auto current = mx::argmax(logits, -1);
+    add_dispatch_ms("sampler_sync(argmax/item)", elapsed_ms(dispatch_start));
+
+    auto sync_start = std::chrono::steady_clock::now();
+    mx::eval(current);
+    mx::synchronize();
+    int token = current.item<int>();
+    add_sync_ms("sampler_sync(argmax/item)", elapsed_ms(sync_start));
+    return token;
 }
 
 QuantizationConfig load_quant_config(const std::string& config_path) {
@@ -441,6 +501,30 @@ int main(int argc, char* argv[]) {
     const std::string config_path = model_dir + "/config.json";
     const std::string tokenizer_path = model_dir + "/tokenizer.json";
 
+    const char* cache_mode_env = std::getenv("QWEN3_5_MLX_LINEAR_CACHE_MODE");
+    if (cache_mode_env != nullptr && std::string(cache_mode_env) == "arrays") {
+        qwen3_5_mlx::runtime_options::set_linear_cache_mode(
+            qwen3_5_mlx::runtime_options::LinearCacheMode::ArraysStyle);
+    } else {
+        qwen3_5_mlx::runtime_options::set_linear_cache_mode(
+            qwen3_5_mlx::runtime_options::LinearCacheMode::Legacy);
+    }
+
+    const char* gated_delta_mode_env = std::getenv("QWEN3_5_MLX_GATED_DELTA_MODE");
+    if (gated_delta_mode_env != nullptr && std::string(gated_delta_mode_env) == "compiled_ops") {
+        qwen3_5_mlx::runtime_options::set_gated_delta_mode(
+            qwen3_5_mlx::runtime_options::GatedDeltaMode::CompiledOps);
+    } else if (gated_delta_mode_env != nullptr && std::string(gated_delta_mode_env) == "metal_kernel") {
+        qwen3_5_mlx::runtime_options::set_gated_delta_mode(
+            qwen3_5_mlx::runtime_options::GatedDeltaMode::MetalKernel);
+    } else {
+        qwen3_5_mlx::runtime_options::set_gated_delta_mode(
+            qwen3_5_mlx::runtime_options::GatedDeltaMode::Ops);
+    }
+
+    const bool trace_enabled = parse_bool_env(std::getenv("QWEN3_5_MLX_STAGE_TRACE"), false);
+    qwen3_5_mlx::stage_trace::set_enabled(trace_enabled);
+
     auto suite_json = JsonParser::parse_file(prompt_suite_path);
     const auto& prompts = suite_json.as_array();
 
@@ -449,6 +533,31 @@ int main(int argc, char* argv[]) {
     Qwen3_5Tokenizer tokenizer = Qwen3_5Tokenizer::from_file(tokenizer_path);
     auto weights = load_weight_map(model_dir);
     auto language_model = load_language_model(weights, config, quant_config);
+
+    if (qwen3_5_mlx::runtime_options::get_gated_delta_mode() !=
+        qwen3_5_mlx::runtime_options::GatedDeltaMode::Ops) {
+        auto warmup_tokens = apply_chat_template_nothink("Warm up gated delta compile path.", tokenizer);
+        auto warmup_input = mx::array(
+            warmup_tokens.data(),
+            mx::Shape{1, static_cast<int>(warmup_tokens.size())},
+            mx::int32);
+        auto warmup_cache = qwen3_5_mlx::LanguageModel::make_cache(language_model.config);
+        auto warmup_logits = language_model.forward(warmup_input, warmup_cache);
+        mx::eval(warmup_logits);
+        mx::synchronize();
+
+        int warmup_token = mx::argmax(
+            qwen3_5_mlx::mlx_helpers::slice_axis(
+                warmup_logits,
+                1,
+                warmup_logits.shape(1) - 1,
+                warmup_logits.shape(1)),
+            -1).item<int>();
+        auto decode_input = mx::array(&warmup_token, mx::Shape{1, 1}, mx::int32);
+        auto decode_logits = language_model.forward(decode_input, warmup_cache);
+        mx::eval(decode_logits);
+        mx::synchronize();
+    }
 
     fs::create_directories(fs::path(output_path).parent_path());
     std::ofstream out(output_path);
@@ -460,8 +569,20 @@ int main(int argc, char* argv[]) {
     out << "{\n";
     out << "  \"model_dir\": \"" << json_escape(model_dir) << "\",\n";
     out << "  \"mode\": \"mlx_custom_quantized\",\n";
+    out << "  \"linear_cache_mode\": \""
+        << qwen3_5_mlx::runtime_options::linear_cache_mode_name(
+               qwen3_5_mlx::runtime_options::get_linear_cache_mode())
+        << "\",\n";
+    out << "  \"gated_delta_mode\": \""
+        << qwen3_5_mlx::runtime_options::gated_delta_mode_name(
+               qwen3_5_mlx::runtime_options::get_gated_delta_mode())
+        << "\",\n";
+    out << "  \"trace_enabled\": " << (trace_enabled ? "true" : "false") << ",\n";
     out << "  \"max_new_tokens\": " << max_new_tokens << ",\n";
     out << "  \"rows\": [\n";
+
+    qwen3_5_mlx::stage_trace::PromptTrace prompt_trace;
+    qwen3_5_mlx::stage_trace::set_active_prompt_trace(trace_enabled ? &prompt_trace : nullptr);
 
     for (size_t i = 0; i < prompts.size(); ++i) {
         const auto& obj = prompts[i].as_object();
@@ -469,6 +590,9 @@ int main(int argc, char* argv[]) {
         const std::string kind = obj.at("kind").as_string();
         const std::string prompt_text = obj.at("prompt_text").as_string();
 
+        if (trace_enabled) {
+            prompt_trace.reset();
+        }
         auto prompt_tokens = apply_chat_template_nothink(prompt_text, tokenizer);
         auto cache = qwen3_5_mlx::LanguageModel::make_cache(language_model.config);
 
@@ -479,15 +603,14 @@ int main(int argc, char* argv[]) {
 
         auto t_wall0 = std::chrono::high_resolution_clock::now();
         auto t0 = t_wall0;
+        qwen3_5_mlx::stage_trace::set_phase(qwen3_5_mlx::stage_trace::Phase::Prefill);
         auto logits = language_model.forward(prompt_input, cache);
         mx::eval(logits);
+        mx::synchronize();
         auto t1 = std::chrono::high_resolution_clock::now();
 
-        auto current = mx::argmax(
-            qwen3_5_mlx::mlx_helpers::slice_axis(logits, 1, logits.shape(1) - 1, logits.shape(1)),
-            -1);
-        mx::eval(current);
-        int token = current.item<int>();
+        int token = sample_argmax_with_trace(
+            qwen3_5_mlx::mlx_helpers::slice_axis(logits, 1, logits.shape(1) - 1, logits.shape(1)));
 
         std::vector<int> generated_tokens;
         generated_tokens.reserve(static_cast<size_t>(max_new_tokens));
@@ -495,12 +618,12 @@ int main(int argc, char* argv[]) {
 
         auto t_decode0 = std::chrono::high_resolution_clock::now();
         while (generated_tokens.size() < static_cast<size_t>(max_new_tokens) && token != kEosImEnd) {
+            qwen3_5_mlx::stage_trace::set_phase(qwen3_5_mlx::stage_trace::Phase::Decode);
             auto decode_input = mx::array(&token, mx::Shape{1, 1}, mx::int32);
             logits = language_model.forward(decode_input, cache);
             mx::eval(logits);
-            current = mx::argmax(logits, -1);
-            mx::eval(current);
-            token = current.item<int>();
+            mx::synchronize();
+            token = sample_argmax_with_trace(logits);
             generated_tokens.push_back(token);
         }
         auto t_decode1 = std::chrono::high_resolution_clock::now();
@@ -523,7 +646,14 @@ int main(int argc, char* argv[]) {
         out << "      \"prefill_ms\": " << json_number(prefill_ms) << ",\n";
         out << "      \"decode_ms\": " << json_number(decode_ms) << ",\n";
         out << "      \"wall_ms\": " << json_number(wall_ms) << ",\n";
-        out << "      \"throughput\": " << json_number(throughput) << "\n";
+        out << "      \"throughput\": " << json_number(throughput) << ",\n";
+        out << "      \"peak_memory_gb\": 0.000";
+        if (trace_enabled) {
+            out << ",\n";
+            out << "      \"stage_trace\": " << json_prompt_trace(prompt_trace) << "\n";
+        } else {
+            out << "\n";
+        }
         out << "    }";
         if (i + 1 != prompts.size()) out << ",";
         out << "\n";
@@ -539,6 +669,8 @@ int main(int argc, char* argv[]) {
             wall_ms,
             throughput);
     }
+
+    qwen3_5_mlx::stage_trace::set_active_prompt_trace(nullptr);
 
     out << "  ]\n";
     out << "}\n";

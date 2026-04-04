@@ -1,0 +1,80 @@
+{
+  "model_dir": "/Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit",
+  "mode": "mlx_custom_quantized",
+  "linear_cache_mode": "arrays",
+  "max_new_tokens": 32,
+  "rows": [
+    {
+      "id": "short_03",
+      "kind": "short",
+      "prompt_text": "Summarize the purpose of a KV cache.",
+      "prompt_tokens": [248045, 846, 198, 8917, 5437, 537, 279, 7193, 314, 264, 81726, 6297, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+      "generated_tokens": [760, 5839, 7193, 314, 2972, 79852, 6297, 332, 318, 1536, 12, 1094, 6297, 8, 303, 19670, 11106, 26012, 318, 3950, 20971, 8, 369, 310, 2972, 67, 2319, 6804, 7698, 52652, 2695, 321],
+      "generated_token_count": 32,
+      "output_text": "The primary purpose of **KV cache** (Key-Value cache) in Large Language Models (LLMs) is to **dramatically reduce computational cost and",
+      "prefill_ms": 7395.314,
+      "decode_ms": 179.814,
+      "wall_ms": 13150.334,
+      "throughput": 2.433,
+      "peak_memory_gb": 0.000,
+      "stage_trace": {
+        "prefill": {"final_norm": {"calls": 1, "dispatch_ms": 0.001, "sync_ms": 0.493}, "full_attention": {"calls": 8, "dispatch_ms": 70.273, "sync_ms": 344.544}, "input_embeddings": {"calls": 1, "dispatch_ms": 0.013, "sync_ms": 1216.401}, "kv_cache_update": {"calls": 8, "dispatch_ms": 0.002, "sync_ms": 65.412}, "linear_attention": {"calls": 24, "dispatch_ms": 757.301, "sync_ms": 588.413}, "linear_cache_update": {"calls": 48, "dispatch_ms": 0.043, "sync_ms": 753.960}, "lm_head": {"calls": 1, "dispatch_ms": 0.002, "sync_ms": 1289.501}, "mlp": {"calls": 32, "dispatch_ms": 0.115, "sync_ms": 3127.707}, "position_ids": {"calls": 1, "dispatch_ms": 0.011, "sync_ms": 0.055}, "rope": {"calls": 8, "dispatch_ms": 2.575, "sync_ms": 1.926}, "sampler_sync(argmax/item)": {"calls": 1, "dispatch_ms": 0.001, "sync_ms": 0.976}},
+        "decode": {"final_norm": {"calls": 31, "dispatch_ms": 0.021, "sync_ms": 8.044}, "full_attention": {"calls": 248, "dispatch_ms": 192.952, "sync_ms": 306.762}, "input_embeddings": {"calls": 31, "dispatch_ms": 0.215, "sync_ms": 24.512}, "kv_cache_update": {"calls": 248, "dispatch_ms": 0.146, "sync_ms": 126.797}, "linear_attention": {"calls": 744, "dispatch_ms": 1125.610, "sync_ms": 755.504}, "linear_cache_update": {"calls": 1488, "dispatch_ms": 0.739, "sync_ms": 1102.533}, "lm_head": {"calls": 31, "dispatch_ms": 0.027, "sync_ms": 445.131}, "mlp": {"calls": 992, "dispatch_ms": 2.060, "sync_ms": 2876.447}, "position_ids": {"calls": 31, "dispatch_ms": 0.034, "sync_ms": 0.750}, "rope": {"calls": 248, "dispatch_ms": 0.633, "sync_ms": 60.696}, "sampler_sync(argmax/item)": {"calls": 31, "dispatch_ms": 0.063, "sync_ms": 9.670}}
+      }
+    },
+    {
+      "id": "short_10",
+      "kind": "short",
+      "prompt_text": "What does latency mean in computing?",
+      "prompt_tokens": [248045, 846, 198, 3710, 1503, 37972, 2977, 303, 23470, 30, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+      "generated_tokens": [623, 23470, 11, 2972, 5351, 2179, 332, 18675, 310, 279, 854, 7383, 1881, 279, 58430, 314, 264, 1622, 321, 279, 1151, 314, 279, 1965, 13, 1049, 369, 15327, 279, 328, 47869, 854],
+      "generated_token_count": 32,
+      "output_text": "In computing, **latency** refers to the time delay between the initiation of a request and the start of the response. It is essentially the \"waiting time",
+      "prefill_ms": 345.658,
+      "decode_ms": 152.597,
+      "wall_ms": 5229.027,
+      "throughput": 6.120,
+      "peak_memory_gb": 0.000,
+      "stage_trace": {
+        "prefill": {"final_norm": {"calls": 1, "dispatch_ms": 0.000, "sync_ms": 0.227}, "full_attention": {"calls": 8, "dispatch_ms": 6.068, "sync_ms": 13.531}, "input_embeddings": {"calls": 1, "dispatch_ms": 0.005, "sync_ms": 0.196}, "kv_cache_update": {"calls": 8, "dispatch_ms": 0.001, "sync_ms": 4.208}, "linear_attention": {"calls": 24, "dispatch_ms": 113.036, "sync_ms": 60.298}, "linear_cache_update": {"calls": 48, "dispatch_ms": 0.028, "sync_ms": 110.303}, "lm_head": {"calls": 1, "dispatch_ms": 0.001, "sync_ms": 24.100}, "mlp": {"calls": 32, "dispatch_ms": 0.067, "sync_ms": 127.929}, "position_ids": {"calls": 1, "dispatch_ms": 0.001, "sync_ms": 0.012}, "rope": {"calls": 8, "dispatch_ms": 0.047, "sync_ms": 1.585}, "sampler_sync(argmax/item)": {"calls": 1, "dispatch_ms": 0.001, "sync_ms": 0.276}},
+        "decode": {"final_norm": {"calls": 31, "dispatch_ms": 0.013, "sync_ms": 6.770}, "full_attention": {"calls": 248, "dispatch_ms": 165.198, "sync_ms": 262.758}, "input_embeddings": {"calls": 31, "dispatch_ms": 0.193, "sync_ms": 7.322}, "kv_cache_update": {"calls": 248, "dispatch_ms": 0.132, "sync_ms": 107.610}, "linear_attention": {"calls": 744, "dispatch_ms": 973.051, "sync_ms": 660.015}, "linear_cache_update": {"calls": 1488, "dispatch_ms": 0.642, "sync_ms": 951.653}, "lm_head": {"calls": 31, "dispatch_ms": 0.020, "sync_ms": 429.844}, "mlp": {"calls": 992, "dispatch_ms": 2.025, "sync_ms": 2361.028}, "position_ids": {"calls": 31, "dispatch_ms": 0.022, "sync_ms": 0.595}, "rope": {"calls": 248, "dispatch_ms": 0.611, "sync_ms": 52.405}, "sampler_sync(argmax/item)": {"calls": 31, "dispatch_ms": 0.064, "sync_ms": 8.746}}
+      }
+    },
+    {
+      "id": "long_03",
+      "kind": "long",
+      "prompt_text": "Describe how a GPU inference engine typically processes a prompt and then decodes new tokens. Include the roles of prefill, KV cache, and decode steps, but keep the explanation readable for an engineer who is not a specialist in LLM serving.",
+      "prompt_tokens": [248045, 846, 198, 72240, 1204, 264, 21966, 42903, 4560, 10813, 11036, 264, 9640, 321, 1179, 1566, 2458, 491, 10885, 13, 28763, 279, 12417, 314, 829, 7320, 11, 81726, 6297, 11, 321, 16401, 7123, 11, 694, 2426, 279, 15673, 32680, 364, 449, 22839, 852, 369, 524, 264, 23011, 303, 436, 10673, 13092, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+      "generated_tokens": [4350, 449, 22839, 80291, 440, 264, 19670, 11106, 4744, 318, 3950, 44, 8, 42903, 4560, 11, 781, 513, 15327, 17610, 264, 14855, 421, 37568, 1330, 12103, 52652, 33286, 25, 2972, 29554, 9121],
+      "generated_token_count": 32,
+      "output_text": "When an engineer interacts with a Large Language Model (LLM) inference engine, they are essentially managing a pipeline that balances two distinct computational phases: **prefilling",
+      "prefill_ms": 774.963,
+      "decode_ms": 154.604,
+      "wall_ms": 5722.593,
+      "throughput": 5.592,
+      "peak_memory_gb": 0.000,
+      "stage_trace": {
+        "prefill": {"final_norm": {"calls": 1, "dispatch_ms": 0.001, "sync_ms": 0.264}, "full_attention": {"calls": 8, "dispatch_ms": 16.964, "sync_ms": 24.611}, "input_embeddings": {"calls": 1, "dispatch_ms": 0.006, "sync_ms": 0.267}, "kv_cache_update": {"calls": 8, "dispatch_ms": 0.002, "sync_ms": 14.838}, "linear_attention": {"calls": 24, "dispatch_ms": 298.797, "sync_ms": 148.739}, "linear_cache_update": {"calls": 48, "dispatch_ms": 0.038, "sync_ms": 290.750}, "lm_head": {"calls": 1, "dispatch_ms": 0.001, "sync_ms": 46.269}, "mlp": {"calls": 32, "dispatch_ms": 0.096, "sync_ms": 238.647}, "position_ids": {"calls": 1, "dispatch_ms": 0.002, "sync_ms": 0.018}, "rope": {"calls": 8, "dispatch_ms": 0.080, "sync_ms": 1.712}, "sampler_sync(argmax/item)": {"calls": 1, "dispatch_ms": 0.002, "sync_ms": 0.289}},
+        "decode": {"final_norm": {"calls": 31, "dispatch_ms": 0.015, "sync_ms": 7.218}, "full_attention": {"calls": 248, "dispatch_ms": 174.146, "sync_ms": 264.143}, "input_embeddings": {"calls": 31, "dispatch_ms": 0.204, "sync_ms": 7.507}, "kv_cache_update": {"calls": 248, "dispatch_ms": 0.139, "sync_ms": 114.984}, "linear_attention": {"calls": 744, "dispatch_ms": 1010.781, "sync_ms": 674.771}, "linear_cache_update": {"calls": 1488, "dispatch_ms": 0.649, "sync_ms": 987.953}, "lm_head": {"calls": 31, "dispatch_ms": 0.028, "sync_ms": 431.964}, "mlp": {"calls": 992, "dispatch_ms": 2.020, "sync_ms": 2359.456}, "position_ids": {"calls": 31, "dispatch_ms": 0.024, "sync_ms": 0.594}, "rope": {"calls": 248, "dispatch_ms": 0.650, "sync_ms": 53.702}, "sampler_sync(argmax/item)": {"calls": 31, "dispatch_ms": 0.060, "sync_ms": 8.871}}
+      }
+    },
+    {
+      "id": "long_09",
+      "kind": "long",
+      "prompt_text": "Explain residual connections in transformer-style models. Describe why they help optimization, what would happen if they were removed, and how they interact with normalization layers.",
+      "prompt_tokens": [248045, 846, 198, 814, 20139, 31088, 12850, 303, 41163, 10970, 3983, 13, 58737, 3069, 781, 1438, 24460, 11, 1092, 1000, 3420, 413, 781, 998, 6747, 11, 321, 1204, 781, 15803, 440, 47096, 13224, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+      "generated_tokens": [13962, 3437, 513, 1737, 3231, 63726, 30, 271, 623, 60277, 10970, 3983, 318, 429, 5365, 28758, 13750, 303, 4437, 681, 264, 2972, 408, 3231, 3511, 332, 318, 269, 10390, 3511, 8, 369],
+      "generated_token_count": 32,
+      "output_text": "### What are Residual Connections?\n\nIn Transformer-style models (and deep neural networks in general), a **residual connection** (or skip connection) is",
+      "prefill_ms": 646.586,
+      "decode_ms": 153.170,
+      "wall_ms": 5550.453,
+      "throughput": 5.765,
+      "peak_memory_gb": 0.000,
+      "stage_trace": {
+        "prefill": {"final_norm": {"calls": 1, "dispatch_ms": 0.001, "sync_ms": 0.212}, "full_attention": {"calls": 8, "dispatch_ms": 8.602, "sync_ms": 22.112}, "input_embeddings": {"calls": 1, "dispatch_ms": 0.007, "sync_ms": 0.231}, "kv_cache_update": {"calls": 8, "dispatch_ms": 0.001, "sync_ms": 6.366}, "linear_attention": {"calls": 24, "dispatch_ms": 221.518, "sync_ms": 116.574}, "linear_cache_update": {"calls": 48, "dispatch_ms": 0.035, "sync_ms": 215.463}, "lm_head": {"calls": 1, "dispatch_ms": 0.001, "sync_ms": 45.725}, "mlp": {"calls": 32, "dispatch_ms": 0.081, "sync_ms": 229.033}, "position_ids": {"calls": 1, "dispatch_ms": 0.018, "sync_ms": 0.026}, "rope": {"calls": 8, "dispatch_ms": 0.076, "sync_ms": 1.887}, "sampler_sync(argmax/item)": {"calls": 1, "dispatch_ms": 0.003, "sync_ms": 2.411}},
+        "decode": {"final_norm": {"calls": 31, "dispatch_ms": 0.014, "sync_ms": 6.607}, "full_attention": {"calls": 248, "dispatch_ms": 177.772, "sync_ms": 264.892}, "input_embeddings": {"calls": 31, "dispatch_ms": 0.197, "sync_ms": 7.183}, "kv_cache_update": {"calls": 248, "dispatch_ms": 0.139, "sync_ms": 111.150}, "linear_attention": {"calls": 744, "dispatch_ms": 974.758, "sync_ms": 666.211}, "linear_cache_update": {"calls": 1488, "dispatch_ms": 0.671, "sync_ms": 952.927}, "lm_head": {"calls": 31, "dispatch_ms": 0.022, "sync_ms": 427.885}, "mlp": {"calls": 992, "dispatch_ms": 2.174, "sync_ms": 2354.321}, "position_ids": {"calls": 31, "dispatch_ms": 0.023, "sync_ms": 0.622}, "rope": {"calls": 248, "dispatch_ms": 0.659, "sync_ms": 61.343}, "sampler_sync(argmax/item)": {"calls": 31, "dispatch_ms": 0.059, "sync_ms": 8.757}}
+      }
+    }
+  ]
+}

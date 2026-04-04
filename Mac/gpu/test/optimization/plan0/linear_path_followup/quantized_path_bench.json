@@ -1,0 +1,8 @@
+{
+  "prefill_tokens": 64,
+  "iterations": 30,
+  "mlp_prefill": {"dispatch_ms": 0.021, "sync_ms": 8.238},
+  "mlp_decode": {"dispatch_ms": 0.002, "sync_ms": 2.027},
+  "lm_head_prefill": {"dispatch_ms": 0.003, "sync_ms": 50.339},
+  "lm_head_decode": {"dispatch_ms": 0.002, "sync_ms": 12.579}
+}

@@ -1,6 +1,6 @@
 # Qwen3.5-9B Output Collection
 
-- Generated at: 2026-04-04T22:56:36
+- Generated at: 2026-04-05T00:55:41
 - Model dir: /Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit
 
 ## short_01 (short)

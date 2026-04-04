@@ -41,10 +41,10 @@
       "generated_token_count": 10,
       "output_text": "Hello! How can I help you today?",
       "eos_reached": true,
-      "prefill_ms": 318.75,
-      "decode_ms": 79.08,
-      "wall_ms": 1109.547,
-      "throughput": 9.013,
+      "prefill_ms": 1244.285,
+      "decode_ms": 78.914,
+      "wall_ms": 2033.425,
+      "throughput": 4.918,
       "peak_memory_gb": 10.495
     },
     {
@@ -88,10 +88,10 @@
       "generated_token_count": 9,
       "output_text": "2 + 2 equals **4**.",
       "eos_reached": true,
-      "prefill_ms": 243.621,
-      "decode_ms": 78.609,
-      "wall_ms": 951.101,
-      "throughput": 9.463,
+      "prefill_ms": 241.395,
+      "decode_ms": 78.82,
+      "wall_ms": 950.773,
+      "throughput": 9.466,
       "peak_memory_gb": 10.504
     },
     {
@@ -193,10 +193,10 @@
       "generated_token_count": 64,
       "output_text": "The primary purpose of **KV cache** (Key-Value cache) in Large Language Models (LLMs) is to **dramatically reduce computational cost and latency during the generation of text** by avoiding redundant calculations.\n\nHere is a breakdown of how it achieves this:\n\n### 1. The Problem: Red",
       "eos_reached": false,
-      "prefill_ms": 240.531,
-      "decode_ms": 86.119,
-      "wall_ms": 5752.137,
-      "throughput": 11.126,
+      "prefill_ms": 244.623,
+      "decode_ms": 90.209,
+      "wall_ms": 6017.999,
+      "throughput": 10.635,
       "peak_memory_gb": 10.509
     },
     {
@@ -252,10 +252,10 @@
       "generated_token_count": 21,
       "output_text": "The gentle spring rain whispers through the budding leaves, washing the world in a fresh, green renewal.",
       "eos_reached": true,
-      "prefill_ms": 240.989,
-      "decode_ms": 85.885,
-      "wall_ms": 2044.576,
-      "throughput": 10.271,
+      "prefill_ms": 246.278,
+      "decode_ms": 83.786,
+      "wall_ms": 2005.785,
+      "throughput": 10.47,
       "peak_memory_gb": 10.509
     },
     {
@@ -356,10 +356,10 @@
       "generated_token_count": 64,
       "output_text": "Imagine you are trying to teach a student how to predict the weather based on past data.\n\n**The Goal:** You want the student to learn the general rule: *\"When the barometer drops and the wind picks up, it usually rains.\"* This is a useful pattern that will help them predict the weather for **",
       "eos_reached": false,
-      "prefill_ms": 242.14,
-      "decode_ms": 86.977,
-      "wall_ms": 5808.638,
-      "throughput": 11.018,
+      "prefill_ms": 240.397,
+      "decode_ms": 87.481,
+      "wall_ms": 5839.15,
+      "throughput": 10.96,
       "peak_memory_gb": 10.509
     },
     {
@@ -460,10 +460,10 @@
       "generated_token_count": 64,
       "output_text": "Here is a quick and refreshing recipe for **Iced Coffee**:\n\n### **Ingredients**\n*   **Coffee**: 2 cups of freshly brewed strong coffee (use a 2:1 coffee-to-water ratio for best results).\n*   **Ice**: 1 cup of ice cubes.\n*   **",
       "eos_reached": false,
-      "prefill_ms": 242.332,
-      "decode_ms": 86.465,
-      "wall_ms": 5776.108,
-      "throughput": 11.08,
+      "prefill_ms": 244.856,
+      "decode_ms": 87.945,
+      "wall_ms": 5873.365,
+      "throughput": 10.897,
       "peak_memory_gb": 10.509
     },
     {
@@ -504,10 +504,10 @@
       "generated_token_count": 5,
       "output_text": "안녕하세요.",
       "eos_reached": true,
-      "prefill_ms": 241.129,
-      "decode_ms": 70.191,
-      "wall_ms": 592.086,
-      "throughput": 8.445,
+      "prefill_ms": 245.034,
+      "decode_ms": 71.039,
+      "wall_ms": 600.229,
+      "throughput": 8.33,
       "peak_memory_gb": 10.509
     },
     {
@@ -576,10 +576,10 @@
       "generated_token_count": 33,
       "output_text": "Here are three planets in our solar system:\n\n1.  **Earth**\n2.  **Mars**\n3.  **Jupiter**",
       "eos_reached": true,
-      "prefill_ms": 240.927,
-      "decode_ms": 87.294,
-      "wall_ms": 3121.616,
-      "throughput": 10.571,
+      "prefill_ms": 242.135,
+      "decode_ms": 86.185,
+      "wall_ms": 3086.245,
+      "throughput": 10.693,
       "peak_memory_gb": 10.509
     },
     {
@@ -636,10 +636,10 @@
       "generated_token_count": 21,
       "output_text": "Silver light above,\nSilent watcher in the night,\nCalm on dark blue sea.",
       "eos_reached": true,
-      "prefill_ms": 242.323,
-      "decode_ms": 85.619,
-      "wall_ms": 2040.33,
-      "throughput": 10.292,
+      "prefill_ms": 241.719,
+      "decode_ms": 84.187,
+      "wall_ms": 2009.637,
+      "throughput": 10.45,
       "peak_memory_gb": 10.509
     },
     {
@@ -738,10 +738,10 @@
       "generated_token_count": 64,
       "output_text": "In computing, **latency** refers to the time delay between the initiation of a request and the start of the response. It is essentially the \"waiting time\" or the lag you experience before a system reacts to your input.\n\nTo visualize this, imagine you are talking to someone on the phone:\n*  ",
       "eos_reached": false,
-      "prefill_ms": 243.406,
-      "decode_ms": 86.275,
-      "wall_ms": 5765.013,
-      "throughput": 11.101,
+      "prefill_ms": 254.308,
+      "decode_ms": 86.718,
+      "wall_ms": 5804.244,
+      "throughput": 11.026,
       "peak_memory_gb": 10.509
     },
     {
@@ -880,10 +880,10 @@
       "generated_token_count": 64,
       "output_text": "Hello! Welcome to the world of Machine Learning. It's a fantastic journey, and one of the first concepts you'll encounter that trips up many beginners is the relationship between **Training Loss** and **Validation Loss**.\n\nThink of building a machine learning model like a student studying for an exam. Let's break down what",
       "eos_reached": false,
-      "prefill_ms": 402.466,
-      "decode_ms": 87.912,
-      "wall_ms": 6028.853,
-      "throughput": 10.616,
+      "prefill_ms": 403.691,
+      "decode_ms": 88.705,
+      "wall_ms": 6080.794,
+      "throughput": 10.525,
       "peak_memory_gb": 10.578
     },
     {
@@ -1012,10 +1012,10 @@
       "generated_token_count": 64,
       "output_text": "Subject: Quick check-in / New plan for [Project Name]\n\nHi [Teammate's Name],\n\nI noticed the deadline for [Task Name] slipped by a bit. No worries at all—these things happen, and I just wanted to check in to see what blocked you so we can avoid it next",
       "eos_reached": false,
-      "prefill_ms": 407.857,
-      "decode_ms": 89.175,
-      "wall_ms": 6115.086,
-      "throughput": 10.466,
+      "prefill_ms": 397.712,
+      "decode_ms": 86.914,
+      "wall_ms": 5960.191,
+      "throughput": 10.738,
       "peak_memory_gb": 10.578
     },
     {
@@ -1156,10 +1156,10 @@
       "generated_token_count": 64,
       "output_text": "When an engineer interacts with a Large Language Model (LLM) inference engine, they are essentially managing a pipeline that balances two distinct computational phases: **prefill** (processing the input) and **decode** (generating the output). While these happen sequentially, the engine optimizes them differently to maximize throughput and latency",
       "eos_reached": false,
-      "prefill_ms": 401.442,
-      "decode_ms": 86.547,
-      "wall_ms": 5940.44,
-      "throughput": 10.774,
+      "prefill_ms": 402.256,
+      "decode_ms": 87.858,
+      "wall_ms": 6025.161,
+      "throughput": 10.622,
       "peak_memory_gb": 10.582
     },
     {
@@ -1289,10 +1289,10 @@
       "generated_token_count": 64,
       "output_text": "Both **Breadth-First Search (BFS)** and **Depth-First Search (DFS)** are fundamental graph traversal algorithms used to explore nodes in a graph or tree. While they both visit every reachable node, they differ fundamentally in the order of exploration, the data structures they use, and their memory efficiency.",
       "eos_reached": false,
-      "prefill_ms": 401.846,
-      "decode_ms": 87.557,
-      "wall_ms": 6005.523,
-      "throughput": 10.657,
+      "prefill_ms": 398.504,
+      "decode_ms": 87.567,
+      "wall_ms": 6002.784,
+      "throughput": 10.662,
       "peak_memory_gb": 10.582
     },
     {
@@ -1422,10 +1422,10 @@
       "generated_token_count": 64,
       "output_text": "Here is a simple and balanced two-day weekend itinerary for Kyoto, designed to give you a taste of the city's highlights without feeling rushed.\n\n### **Day 1: The Iconic Temples & Traditional Streets**\n*   **Morning:** Start your day at **Kinkaku-ji (The Golden Pavilion",
       "eos_reached": false,
-      "prefill_ms": 404.591,
-      "decode_ms": 86.34,
-      "wall_ms": 5930.346,
-      "throughput": 10.792,
+      "prefill_ms": 398.177,
+      "decode_ms": 86.858,
+      "wall_ms": 5957.094,
+      "throughput": 10.743,
       "peak_memory_gb": 10.582
     },
     {
@@ -1551,10 +1551,10 @@
       "generated_token_count": 64,
       "output_text": "### What is a Database Index?\n\nAt its core, a **database index** is a data structure that improves the speed of data retrieval operations on a database table. You can think of it as the **index at the back of a physical book**.\n\nWithout an index, finding a specific word in a book requires",
       "eos_reached": false,
-      "prefill_ms": 395.228,
-      "decode_ms": 86.154,
-      "wall_ms": 5909.079,
-      "throughput": 10.831,
+      "prefill_ms": 395.689,
+      "decode_ms": 90.52,
+      "wall_ms": 6188.956,
+      "throughput": 10.341,
       "peak_memory_gb": 10.582
     },
     {
@@ -1682,10 +1682,10 @@
       "generated_token_count": 64,
       "output_text": "The fluorescent lights of the 42nd-floor server room hummed with a low, electric buzz that seemed to vibrate directly in Elias's teeth. It was 2:14 AM on a Tuesday, the kind of hour where the city outside the floor-to-ceiling windows had surrendered to darkness, leaving only",
       "eos_reached": false,
-      "prefill_ms": 402.351,
-      "decode_ms": 87.384,
-      "wall_ms": 5994.917,
-      "throughput": 10.676,
+      "prefill_ms": 409.931,
+      "decode_ms": 87.253,
+      "wall_ms": 5994.119,
+      "throughput": 10.677,
       "peak_memory_gb": 10.582
     },
     {
@@ -1812,10 +1812,10 @@
       "generated_token_count": 64,
       "output_text": "Improving sleep quality without medication is entirely possible by aligning your habits with your body's natural circadian rhythm. Here is practical, actionable advice focusing on the four key areas you mentioned:\n\n### 1. Establish a Consistent Bedtime Routine\nYour brain needs a signal that it is time to wind down.",
       "eos_reached": false,
-      "prefill_ms": 395.353,
-      "decode_ms": 86.407,
-      "wall_ms": 5925.404,
-      "throughput": 10.801,
+      "prefill_ms": 395.46,
+      "decode_ms": 87.969,
+      "wall_ms": 6025.502,
+      "throughput": 10.622,
       "peak_memory_gb": 10.582
     },
     {
@@ -1938,10 +1938,10 @@
       "generated_token_count": 64,
       "output_text": "### What are Residual Connections?\n\nIn Transformer-style models (and deep neural networks in general), a **residual connection** (or skip connection) is a structural shortcut that allows the input of a layer (or block) to be added directly to its output.\n\nMathematically, instead of learning a direct",
       "eos_reached": false,
-      "prefill_ms": 393.738,
-      "decode_ms": 87.129,
-      "wall_ms": 5970.02,
-      "throughput": 10.72,
+      "prefill_ms": 395.518,
+      "decode_ms": 86.891,
+      "wall_ms": 5956.562,
+      "throughput": 10.744,
       "peak_memory_gb": 10.582
     },
     {
@@ -2069,10 +2069,10 @@
       "generated_token_count": 64,
       "output_text": "# Technical Note: Challenges in Reproducing Machine Learning Experiments\n\nReproducibility in machine learning (ML) is frequently hindered by the complex interplay of stochastic algorithms, non-deterministic hardware, and evolving software ecosystems. Achieving bit-for-bit identical results across different runs or environments requires meticulous control over several critical",
       "eos_reached": false,
-      "prefill_ms": 399.76,
-      "decode_ms": 86.744,
-      "wall_ms": 5951.385,
-      "throughput": 10.754,
+      "prefill_ms": 396.62,
+      "decode_ms": 87.487,
+      "wall_ms": 5995.812,
+      "throughput": 10.674,
       "peak_memory_gb": 10.582
     }
   ],
@@ -2080,10 +2080,10 @@
     "rows": 20,
     "avg_prompt_tokens": 34.85,
     "avg_generated_tokens": 49.75,
-    "avg_prefill_ms": 325.039,
-    "avg_decode_ms": 85.193,
-    "avg_wall_ms": 4636.61,
-    "avg_throughput": 10.473,
+    "avg_prefill_ms": 371.929,
+    "avg_decode_ms": 85.665,
+    "avg_wall_ms": 4720.391,
+    "avg_throughput": 10.21,
     "avg_peak_memory_gb": 10.544
   }
 }
