@@ -45,6 +45,22 @@ qwen3_5_mlx가 prefill 831.370 ms, decode 119.557 ms/tok, throughput 7.468 tok/s
              - isolated custom `gated_delta` microbench에서도 `compiled_ops`는 ops 대비 prefill sync `14.664 -> 9.619 ms (-34.4%)`, decode sync `0.474 -> 0.405 ms (-14.6%)`였다. 즉 compile 부재는 실제 병목이었다.
              - 하지만 upstream Python `gated_delta_update`를 `use_kernel=False/True`로 직접 나누어 재보면 prefill sync `9.795 -> 0.729 ms (-92.6%)`, decode sync `0.473 -> 0.333 ms (-29.6%)`로 kernel 경로 이득이 더 크다. 즉 compile 부재만이 아니라 upstream의 Metal kernel recurrent path 부재가 더 강한 원인이다.
              - 따라서 2번의 현재 결론은 이렇다. `linear_attention` anomaly의 핵심은 `linear_cache_update` 자체보다 `gated_delta_update` 구현 차이이며, 그 안에서도 `@mx.compile`/graph reuse 부재가 1차 원인, Metal kernel recurrent update 부재가 더 큰 2차이자 최종 원인 후보다.
+             - 그 다음 upstream Python gated_delta kernel을 C++ `mx::fast::metal_kernel(...)`로 이식한 뒤 trace를 다시 떠 보니 custom metal-kernel trace 평균은 `prefill 337.394 ms`, `decode 143.549 ms/tok`, `wall 4931.232 ms`, `6.494 tok/s`였다. 즉 compiled_ops 대비 prefill은 크게 더 좋아졌지만 decode는 `151.419 -> 143.549 ms/tok` 수준의 개선에 그쳤다.
+             - 중요한 새 결론은 runner 효과를 분리했을 때도 decode gap이 거의 그대로 남는다는 점이다. base는 trace `115.162 ms/tok`에서 no-trace official runner `85.665 ms/tok`로 `-29.497 ms/tok`를 회복했고, custom metal-kernel은 trace `143.549 ms/tok`에서 no-trace runner `111.496 ms/tok`로 `-32.053 ms/tok`를 회복했다. 즉 `async_eval`/운영 레벨 이득은 양쪽 다 비슷해서, 남은 차이의 주원인은 runner가 아니라 model-core다.
+             - metal-kernel trace에서 남은 decode 양의 delta는 주로 `mlp` (`1951.633 -> 2298.435`, `+346.802 ms`)와 `lm_head` (`351.627 -> 422.090`, `+70.463 ms`)에 있다. `full_attention`은 `+34.282 ms`, `kv_cache_update`는 `+5.451 ms` 수준이라 secondary다.
+             - 반대로 metal-kernel 이후 custom의 outer `linear_attention` sync는 base보다 낮아졌다 (`859.887 -> 580.943`). 즉 recurrent core 자체는 더 이상 남은 decode bottleneck의 중심이 아니다.
+             - linear-attention microbench로 compiled_ops와 metal_kernel을 직접 비교하면 `gated_delta_update` sync가 `244.187 -> 50.760 ms (-79.2%)`, dispatch가 `5.779 -> 1.830 ms (-68.3%)`로 크게 줄었다. 그런데 이 시점부터 local dominant term은 gated-delta가 아니라 `in_proj_qkv` (`164.365 ms`), `out_proj` (`110.823 ms`), `in_proj_z` (`90.579 ms`) 같은 quantized projection path가 된다.
+             - 따라서 decode follow-up 이후의 핵심 질문도 바뀌었다. 지금 필요한 것은 “무엇을 최적화할까”보다 “base와 custom이 decode에서 정확히 어디서 다르게 느려지는가”를 고정하는 것이다. 현재 trace와 microbench 기준으로 그 차이는 `mlp`, `lm_head`, nested `linear_cache_update`, 그리고 일부 `full_attention` 쪽에서 반복 재현된다.
+             - 추가로 base official MLX 모듈과 custom C++ 경로에 대해 real weight + decode shape로 isolated projection microbench를 돌려 보니 `mlp` sync는 `1.975 -> 1.924 ms`, `lm_head` sync는 `11.504 -> 10.965 ms`였다. 즉 full-model trace에서 보인 `mlp`/`lm_head` 양의 delta는 raw projection kernel 자체보다 상위 graph/context 차이일 가능성이 높다.
+             - split decode trace를 추가로 떠서 `linear_cache_update`와 `full_attention`을 더 쪼개 보니, 처음에는 `linear_cache_update`의 양의 delta가 주로 `linear_cache_conv_state_update` (`+73.450 ms`)에서 온 것처럼 보였고 `linear_cache_rec_state_update` (`+28.001 ms`)는 그보다 작았다.
+             - 그런데 linear attention 자체를 `in_proj_qkv / in_proj_z / conv1d / gated_delta / out_proj`까지 다시 쪼개서 재측정하자 해석이 바뀌었다. 새 trace에서는 `linear_cache_conv_state_update`가 오히려 base보다 낮았고 (`-9.637 ms`), 실제 양의 delta는 `linear_attention_in_proj_qkv` (`+70.213 ms`), `linear_attention_in_proj_z` (`+45.991 ms`), `linear_attention_gated_delta` (`+14.346 ms`)에 모였다. 즉 이전의 양의 `linear_cache_update` 신호는 projection graph work가 cache stage에 섞여 들어간 계측 착시에 가까웠다.
+             - 같은 split trace에서 `full_attention` 내부의 남은 양의 delta는 `full_attention_q_proj` (`+21.225 ms`)와 `full_attention_cache_update` (`+6.105 ms`) 정도로 좁혀졌고 `full_attention_sdpa`는 여전히 거의 차이가 없었다. `full_attention_o_proj`는 새 계측에서는 오히려 base보다 낮았다 (`-14.531 ms`).
+             - 추가로 custom full-attention KV cache를 upstream 스타일 `step_buffer`로 바꿔 A/B 해 보니 trace 기준 `full_attention_cache_update`는 실제로 줄었지만 (`-5.925 ms`), no-trace decode 평균은 `108.990 -> 110.330 ms/tok`로 개선되지 않았다. 따라서 full-attention KV concat은 trace-forced sync에서는 영향을 주지만 현재 end-to-end decode gap의 주원인으로 보기는 어렵다.
+             - 그리고 official model의 live decode activation을 그대로 캡처해서 `linear_attention.in_proj_qkv` / `in_proj_z`를 base `QuantizedLinear`와 manual `mx.quantized_matmul`로 1:1 replay해 보면 둘은 사실상 동일했다. `in_proj_qkv` 평균 sync는 `0.656 vs 0.652 ms`, `in_proj_z`는 `0.452 vs 0.443 ms`, max abs diff는 둘 다 `0.0`이었다.
+             - 같은 replay에서 `in_proj_z` reshape only cost는 `0.044 ms`에 불과했고, `dequantize + dense matmul`은 오히려 훨씬 비쌌다 (`in_proj_qkv 2.206 ms`, `in_proj_z 1.277 ms`). 즉 현재 남은 decode delta는 "manual quantized projection primitive가 원래 느리다"거나 "reshape 비용"으로는 설명되지 않는다.
+             - 따라서 최신 결론은 한 단계 더 좁혀진다. `linear_attention_in_proj_qkv` / `in_proj_z`의 양의 trace delta는 raw projection op 자체보다 full-model graph context 안의 scheduling / dependency / fusion 차이에서 나올 가능성이 높다.
+             - 이 해석은 subgraph replay에서도 유지된다. `in_proj_qkv / in_proj_z / in_proj_a / in_proj_b`를 묶은 projection bundle 전체를 live decode sample로 replay해도 official과 manual quantized path는 `0.854 vs 0.850 ms`로 같았다. 또 full `linear-attention block` 전체를 replay할 때 projection만 manual path로 교체해도 `1.161 vs 1.161 ms`, output diff `0.0`이었다.
+             - 즉 base 내부에서는 projection primitive를 manual `quantized_matmul`로 바꾸더라도 block-level scheduling cost가 달라지지 않는다. 따라서 다음 단계는 base 내부 swap 실험이 아니라, custom full-model graph가 같은 block을 어떤 command/kernels 묶음으로 materialize하는지 직접 확인하는 것이다.
          - 테스트 / 실험 설계:
              - 1차: base trace harness를 Python으로 만든다. 새 스크립트에서 official model을 로드한 뒤, 위 메서드들을 wrapper로 감싸 `prefill` 1회와 `decode` N step 동안 stage별 누적 시간을 JSON으로 저장한다.
              - 1차 측정 단위는 두 종류로 나눈다. `dispatch_ms`는 wrapper 안의 순수 Python/graph scheduling 시간, `sync_ms`는 stage 출력 또는 cache state에 대해 `mx.eval(...)` 후 `mx.synchronize()`까지 포함한 시간이다. 해석은 `sync_ms`를 우선으로 하고 `dispatch_ms`는 host overhead 참고치로만 본다.
@@ -60,12 +76,12 @@ qwen3_5_mlx가 prefill 831.370 ms, decode 119.557 ms/tok, throughput 7.468 tok/s
 
          3-1) KV cache 증가 방식이 base와 다르다.
          - 근거: 우리 구현의 `models/qwen3_5_mlx/language.h`에서 `KVCache::update_and_fetch()`는 decode 때마다 `mx::concatenate`로 key/value를 계속 붙인다. 반면 base가 쓰는 `/opt/homebrew/lib/python3.11/site-packages/mlx_lm/models/cache.py`의 `KVCache`는 256 token step으로 미리 버퍼를 잡고 in-place write 후 slice만 반환한다.
-         - 코멘트: decode 성능 저하의 가장 강한 후보. 현재 decode delta가 `+34.364 ms/tok`인데, attention layer cache reallocation이 그 차이를 상당 부분 설명할 수 있다.
+         - 코멘트: 이제는 “강한 후보”라고 보기 어렵다. 실제로 custom에 `step_buffer` KV cache를 추가해 A/B 해 보면 trace `full_attention_cache_update`는 줄지만 no-trace decode 평균은 개선되지 않았다. 즉 이 항목은 trace 계측상 일부 양의 delta를 설명하지만 현재 end-to-end decode gap의 주원인은 아니다.
          - 테스트: custom `KVCache`를 없애고 upstream 스타일의 step-based preallocated cache를 그대로 이식해 A/B 테스트한다. short prompt 10개만 먼저 돌려도 decode 개선 여부를 빠르게 볼 수 있다.
 
          3-2) linear attention용 conv/recurrence cache도 매 step 재할당 성향이 있다.
          - 근거: `GatedDeltaNet::forward()`에서 `conv_state`를 `concatenate + take_last_tokens`로 갱신한다. upstream `/opt/homebrew/lib/python3.11/site-packages/mlx_lm/models/lfm2.py`의 `ShortConv`는 `ArraysCache`와 `advance()`를 이용해 상태를 유지하고 필요한 구간만 갱신한다.
-         - 코멘트: full attention만 느린 게 아니라 linear attention 경로도 decode 누적 비용을 키울 가능성이 높다.
+         - 코멘트: 최신 linear split trace 기준으로는 이 항목의 해석도 바뀌었다. `conv_state_update` 자체는 base보다 느리지 않았고 (`-9.637 ms`), 이전 양의 신호는 `in_proj_qkv`와 `in_proj_z` 같은 projection graph cost가 cache stage에 섞여 잡힌 쪽에 더 가깝다. 즉 지금 살아 있는 질문은 “conv-state update 자체가 느리다”가 아니라 “왜 linear-attention projection path가 full-model context에서 base보다 비싸게 누적되나”이다.
          - 테스트: linear layer만 따로 남긴 micro-benchmark를 만든다. 1 token decode를 512회 반복하면서 `conv_state` 갱신 시간을 분리 측정한다. 이후 upstream `ArraysCache`/`ShortConv` 방식으로 바꿔서 동일 측정값을 비교한다.
 
          3-3) RoPE 구현이 CPU loop 중심이라 prefill 손해가 클 수 있다.
@@ -90,7 +106,7 @@ qwen3_5_mlx가 prefill 831.370 ms, decode 119.557 ms/tok, throughput 7.468 tok/s
 
          3-7) tied embedding / lm_head 경로가 upstream module과 다르다.
          - 근거: base LFM2는 `embed_tokens.as_linear(out)`를 사용한다. 우리 쪽은 `mlx_helpers::embedding()`에서 quantized row를 `dequantize`하고, lm_head는 generic `quantized_matmul`을 호출한다.
-         - 코멘트: 기능적으로는 맞더라도 embedding gather와 lm_head projection이 upstream quantized embedding module보다 덜 최적화됐을 가능성이 있다.
+         - 코멘트: isolated decode microbench에서는 `lm_head` 자체가 base보다 느리지 않았다. 따라서 이 항목은 “raw lm_head kernel이 느리다”보다는 full-model graph 안에서 앞뒤 문맥과 함께 차이가 증폭되는지 보는 쪽으로 해석을 바꿔야 한다.
          - 테스트: 별도 micro-benchmark로 `embedding only`, `lm_head only` 시간을 뽑는다. prompt token 길이와 vocab projection 크기를 고정해 base 모듈과 custom helper를 직접 비교한다.
 
          3-8) 현재 benchmark에 correctness noise가 섞여 있다.
@@ -108,7 +124,11 @@ qwen3_5_mlx가 prefill 831.370 ms, decode 119.557 ms/tok, throughput 7.468 tok/s
          - 코멘트: “모델 구현” 차이와 “runner 운영” 차이가 섞여 있다. 최적화 계획에서는 둘을 분리해야 한다.
          - 테스트: runner-only benchmark를 만든다. 동일한 `qwen3_5_mlx` model forward를 두 가지 실행기(blocking vs async/chunked)로 돌려서 runner overhead를 먼저 분리한다.
 
-     4) 현재 우선순위 정리
-         - 1순위: `gated_delta_update`의 Metal kernel / fused recurrent path 이식 또는 동등 최적화
-         - 2순위: `KVCache`, generation sync 패턴
-         - 3순위: `RoPE`, position id 생성, prefill chunking, lm_head/embedding quantized path, loader 정합성
+     4) 현재 decode 차이 정리
+         - 최신 no-trace 평균은 official MLX `85.665 ms/tok`, custom `111.496 ms/tok`로 decode gap은 `+25.831 ms/tok`다.
+         - trace 평균은 base `115.162 ms/tok`, custom `143.549 ms/tok`로 decode gap이 `+28.387 ms/tok` 재현된다. 즉 차이의 대부분은 runner 바깥이 아니라 model-core 안에 있다.
+         - prompt 4개 기준 decode sync delta는 `linear_cache_update +815.073 ms`, `mlp +346.802 ms`, `lm_head +70.463 ms`, `full_attention +34.282 ms`가 4/4 prompt에서 반복된다. 관련 diff 산출물은 `test/optimization/plan0/decode_followup/base_custom_decode_gap.md`에 정리했다.
+         - 반대로 outer `linear_attention` sync는 `-278.944 ms`로 base보다 낮고, runner benefit도 base `-29.497 ms/tok`, custom `-32.053 ms/tok`로 비슷하다. 따라서 지금 단계의 질문은 “linear_attention 전체를 더 최적화할까”가 아니라 “왜 nested linear cache, mlp, lm_head, 일부 attention이 base보다 다르게 비싸게 나오나”이다.
+         - 추가 split trace와 projection microbench 결과까지 합치면, 현재 더 구체적인 질문은 이렇게 다시 좁혀진다. `mlp`와 `lm_head` raw kernel은 느리지 않고, full-attention KV cache도 no-trace decode를 실질적으로 개선하지 못했다. 반면 linear split trace에서는 `linear_attention_in_proj_qkv`, `linear_attention_in_proj_z`, `linear_attention_gated_delta`가 여전히 base보다 높다. 따라서 다음 질문은 “cache update 자체가 느린가”가 아니라 “왜 linear-attention projection path가 full-model graph context에서 base보다 더 큰 sync cost를 만들고 있나”이다.
+         - live decode projection replay까지 합치면 질문은 더 명확하다. 같은 activation, 같은 weight, 같은 quantized primitive를 1:1로 replay하면 base `QuantizedLinear`와 manual `mx.quantized_matmul`는 동일하다. 그러므로 다음 단계는 projection primitive 최적화가 아니라, full-model graph 안에서 base와 custom의 projection 주변 연산 배치와 graph composition이 어떻게 달라지는지 확인하는 것이다.
+         - subgraph replay 결과까지 합치면, 그 확인 범위는 `projection bundle -> full linear-attention block -> full model` 순서로 올라가야 한다. 현재는 bundle과 block 모두 base 내부 swap에 대해 flat하므로, 남은 비교는 custom이 같은 block을 실행할 때 kernel 수, materialization, command-buffer 경계가 base와 어떻게 다른지 보는 쪽이 맞다.

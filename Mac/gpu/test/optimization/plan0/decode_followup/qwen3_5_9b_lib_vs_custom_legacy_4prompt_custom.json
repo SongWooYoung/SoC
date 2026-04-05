@@ -1,0 +1,67 @@
+{
+  "model_dir": "/Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit",
+  "mode": "mlx_custom_quantized",
+  "linear_cache_mode": "legacy",
+  "full_attention_cache_mode": "legacy",
+  "gated_delta_mode": "metal_kernel",
+  "trace_enabled": false,
+  "max_new_tokens": 32,
+  "rows": [
+    {
+      "id": "short_03",
+      "kind": "short",
+      "prompt_text": "Summarize the purpose of a KV cache.",
+      "prompt_tokens": [248045, 846, 198, 8917, 5437, 537, 279, 7193, 314, 264, 81726, 6297, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+      "generated_tokens": [760, 5839, 7193, 314, 2972, 79852, 6297, 332, 318, 1536, 12, 1094, 6297, 8, 303, 19670, 11106, 26012, 318, 3950, 20971, 8, 369, 310, 2972, 67, 2319, 6804, 7698, 52652, 2695, 321],
+      "generated_token_count": 32,
+      "output_text": "The primary purpose of **KV cache** (Key-Value cache) in Large Language Models (LLMs) is to **dramatically reduce computational cost and",
+      "prefill_ms": 226.107,
+      "decode_ms": 116.171,
+      "wall_ms": 3943.880,
+      "throughput": 8.114,
+      "peak_memory_gb": 0.000
+    },
+    {
+      "id": "short_10",
+      "kind": "short",
+      "prompt_text": "What does latency mean in computing?",
+      "prompt_tokens": [248045, 846, 198, 3710, 1503, 37972, 2977, 303, 23470, 30, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+      "generated_tokens": [623, 23470, 11, 2972, 5351, 2179, 332, 18675, 310, 279, 854, 7383, 1881, 279, 58430, 314, 264, 1622, 321, 279, 1151, 314, 279, 1965, 13, 1049, 369, 15327, 279, 328, 47869, 854],
+      "generated_token_count": 32,
+      "output_text": "In computing, **latency** refers to the time delay between the initiation of a request and the start of the response. It is essentially the \"waiting time",
+      "prefill_ms": 206.210,
+      "decode_ms": 110.066,
+      "wall_ms": 3728.603,
+      "throughput": 8.582,
+      "peak_memory_gb": 0.000
+    },
+    {
+      "id": "long_03",
+      "kind": "long",
+      "prompt_text": "Describe how a GPU inference engine typically processes a prompt and then decodes new tokens. Include the roles of prefill, KV cache, and decode steps, but keep the explanation readable for an engineer who is not a specialist in LLM serving.",
+      "prompt_tokens": [248045, 846, 198, 72240, 1204, 264, 21966, 42903, 4560, 10813, 11036, 264, 9640, 321, 1179, 1566, 2458, 491, 10885, 13, 28763, 279, 12417, 314, 829, 7320, 11, 81726, 6297, 11, 321, 16401, 7123, 11, 694, 2426, 279, 15673, 32680, 364, 449, 22839, 852, 369, 524, 264, 23011, 303, 436, 10673, 13092, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+      "generated_tokens": [4350, 449, 22839, 80291, 440, 264, 19670, 11106, 4744, 318, 3950, 44, 8, 42903, 4560, 11, 781, 513, 15327, 17610, 264, 14855, 421, 37568, 1330, 12103, 52652, 33286, 25, 2972, 29554, 9121],
+      "generated_token_count": 32,
+      "output_text": "When an engineer interacts with a Large Language Model (LLM) inference engine, they are essentially managing a pipeline that balances two distinct computational phases: **prefilling",
+      "prefill_ms": 404.247,
+      "decode_ms": 109.494,
+      "wall_ms": 3908.371,
+      "throughput": 8.188,
+      "peak_memory_gb": 0.000
+    },
+    {
+      "id": "long_09",
+      "kind": "long",
+      "prompt_text": "Explain residual connections in transformer-style models. Describe why they help optimization, what would happen if they were removed, and how they interact with normalization layers.",
+      "prompt_tokens": [248045, 846, 198, 814, 20139, 31088, 12850, 303, 41163, 10970, 3983, 13, 58737, 3069, 781, 1438, 24460, 11, 1092, 1000, 3420, 413, 781, 998, 6747, 11, 321, 1204, 781, 15803, 440, 47096, 13224, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+      "generated_tokens": [13962, 3437, 513, 1737, 3231, 63726, 30, 271, 623, 60277, 10970, 3983, 318, 429, 5365, 28758, 13750, 303, 4437, 681, 264, 2972, 408, 3231, 3511, 332, 318, 269, 10390, 3511, 8, 369],
+      "generated_token_count": 32,
+      "output_text": "### What are Residual Connections?\n\nIn Transformer-style models (and deep neural networks in general), a **residual connection** (or skip connection) is",
+      "prefill_ms": 377.154,
+      "decode_ms": 109.153,
+      "wall_ms": 3870.355,
+      "throughput": 8.268,
+      "peak_memory_gb": 0.000
+    }
+  ]
+}

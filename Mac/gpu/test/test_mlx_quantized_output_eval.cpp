@@ -510,6 +510,15 @@ int main(int argc, char* argv[]) {
             qwen3_5_mlx::runtime_options::LinearCacheMode::Legacy);
     }
 
+    const char* full_attention_cache_mode_env = std::getenv("QWEN3_5_MLX_FULL_ATTENTION_CACHE_MODE");
+    if (full_attention_cache_mode_env != nullptr && std::string(full_attention_cache_mode_env) == "step_buffer") {
+        qwen3_5_mlx::runtime_options::set_full_attention_cache_mode(
+            qwen3_5_mlx::runtime_options::FullAttentionCacheMode::StepBuffer);
+    } else {
+        qwen3_5_mlx::runtime_options::set_full_attention_cache_mode(
+            qwen3_5_mlx::runtime_options::FullAttentionCacheMode::Legacy);
+    }
+
     const char* gated_delta_mode_env = std::getenv("QWEN3_5_MLX_GATED_DELTA_MODE");
     if (gated_delta_mode_env != nullptr && std::string(gated_delta_mode_env) == "compiled_ops") {
         qwen3_5_mlx::runtime_options::set_gated_delta_mode(
@@ -572,6 +581,10 @@ int main(int argc, char* argv[]) {
     out << "  \"linear_cache_mode\": \""
         << qwen3_5_mlx::runtime_options::linear_cache_mode_name(
                qwen3_5_mlx::runtime_options::get_linear_cache_mode())
+        << "\",\n";
+    out << "  \"full_attention_cache_mode\": \""
+        << qwen3_5_mlx::runtime_options::full_attention_cache_mode_name(
+               qwen3_5_mlx::runtime_options::get_full_attention_cache_mode())
         << "\",\n";
     out << "  \"gated_delta_mode\": \""
         << qwen3_5_mlx::runtime_options::gated_delta_mode_name(

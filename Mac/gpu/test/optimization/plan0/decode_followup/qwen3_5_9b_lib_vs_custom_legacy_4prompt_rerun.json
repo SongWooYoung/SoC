@@ -1,0 +1,115 @@
+{
+  "generated_at": "2026-04-05T09:51:48",
+  "prompt_suite": "test/optimization/plan0/decode_followup/qwen3_5_9b_lib_vs_custom_legacy_4prompt_suite.json",
+  "model_dir": "/Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit",
+  "max_new_tokens": 32,
+  "mlx_library": {
+    "label": "qwen3_5_9b_mlx_library",
+    "backend": "mlx_vlm",
+    "model_dir": "/Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit",
+    "summary": {
+      "rows": 4,
+      "avg_prompt_tokens": 36.25,
+      "avg_generated_tokens": 32.0,
+      "avg_prefill_ms": 546.781,
+      "avg_decode_ms": 85.699,
+      "avg_wall_ms": 3289.167,
+      "avg_throughput": 9.829,
+      "avg_peak_memory_gb": 10.545
+    }
+  },
+  "custom": {
+    "label": "qwen3_5_9b_qwen3_5_mlx",
+    "backend": "qwen3_5_mlx",
+    "model_dir": "/Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit",
+    "linear_cache_mode": "legacy",
+    "gated_delta_mode": "metal_kernel",
+    "trace_enabled": false,
+    "summary": {
+      "rows": 4,
+      "avg_prompt_tokens": 36.25,
+      "avg_generated_tokens": 32.0,
+      "avg_prefill_ms": 303.86,
+      "avg_decode_ms": 112.7,
+      "avg_wall_ms": 3910.595,
+      "avg_throughput": 8.185,
+      "avg_peak_memory_gb": 0.0
+    }
+  },
+  "summary_delta": {
+    "rows": 4,
+    "avg_prefill_ms_delta": -242.921,
+    "avg_decode_ms_delta": 27.001,
+    "avg_wall_ms_delta": 621.428,
+    "avg_throughput_delta": -1.644,
+    "prompt_tokens_match_count": 4,
+    "generated_tokens_match_count": 3,
+    "output_text_match_count": 3
+  },
+  "prompt_comparisons": [
+    {
+      "id": "short_03",
+      "kind": "short",
+      "prompt_text": "Summarize the purpose of a KV cache.",
+      "prompt_tokens_match": true,
+      "generated_tokens_match": true,
+      "output_text_match": true,
+      "library_wall_ms": 3894.995,
+      "custom_wall_ms": 3840.688,
+      "wall_ms_delta": -54.307,
+      "library_throughput": 8.216,
+      "custom_throughput": 8.332,
+      "throughput_delta": 0.116,
+      "library_output_text": "The primary purpose of **KV cache** (Key-Value cache) in Large Language Models (LLMs) is to **dramatically reduce computational cost and",
+      "custom_output_text": "The primary purpose of **KV cache** (Key-Value cache) in Large Language Models (LLMs) is to **dramatically reduce computational cost and"
+    },
+    {
+      "id": "short_10",
+      "kind": "short",
+      "prompt_text": "What does latency mean in computing?",
+      "prompt_tokens_match": true,
+      "generated_tokens_match": true,
+      "output_text_match": true,
+      "library_wall_ms": 3046.241,
+      "custom_wall_ms": 3864.329,
+      "wall_ms_delta": 818.088,
+      "library_throughput": 10.505,
+      "custom_throughput": 8.281,
+      "throughput_delta": -2.224,
+      "library_output_text": "In computing, **latency** refers to the time delay between the initiation of a request and the start of the response. It is essentially the \"waiting time",
+      "custom_output_text": "In computing, **latency** refers to the time delay between the initiation of a request and the start of the response. It is essentially the \"waiting time"
+    },
+    {
+      "id": "long_03",
+      "kind": "long",
+      "prompt_text": "Describe how a GPU inference engine typically processes a prompt and then decodes new tokens. Include the roles of prefill, KV cache, and decode steps, but keep the explanation readable for an engineer who is not a specialist in LLM serving.",
+      "prompt_tokens_match": true,
+      "generated_tokens_match": false,
+      "output_text_match": false,
+      "library_wall_ms": 3142.937,
+      "custom_wall_ms": 3995.386,
+      "wall_ms_delta": 852.449,
+      "library_throughput": 10.182,
+      "custom_throughput": 8.009,
+      "throughput_delta": -2.173,
+      "library_output_text": "When an engineer interacts with a Large Language Model (LLM) inference engine, they are essentially managing a pipeline that balances two distinct computational phases: **prefill",
+      "custom_output_text": "When an engineer interacts with a Large Language Model (LLM) inference engine, they are essentially managing a pipeline that balances two distinct computational phases: **prefilling"
+    },
+    {
+      "id": "long_09",
+      "kind": "long",
+      "prompt_text": "Explain residual connections in transformer-style models. Describe why they help optimization, what would happen if they were removed, and how they interact with normalization layers.",
+      "prompt_tokens_match": true,
+      "generated_tokens_match": true,
+      "output_text_match": true,
+      "library_wall_ms": 3072.494,
+      "custom_wall_ms": 3941.977,
+      "wall_ms_delta": 869.483,
+      "library_throughput": 10.415,
+      "custom_throughput": 8.118,
+      "throughput_delta": -2.297,
+      "library_output_text": "### What are Residual Connections?\n\nIn Transformer-style models (and deep neural networks in general), a **residual connection** (or skip connection) is",
+      "custom_output_text": "### What are Residual Connections?\n\nIn Transformer-style models (and deep neural networks in general), a **residual connection** (or skip connection) is"
+    }
+  ]
+}

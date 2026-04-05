@@ -36,6 +36,20 @@ struct StageStats {
 
 using StageMap = std::unordered_map<std::string, StageStats>;
 
+qwen3_5_mlx::runtime_options::GatedDeltaMode gated_delta_mode_from_env() {
+    const char* value = std::getenv("QWEN3_5_MLX_GATED_DELTA_MODE");
+    if (value != nullptr) {
+        const std::string text(value);
+        if (text == "compiled_ops") {
+            return qwen3_5_mlx::runtime_options::GatedDeltaMode::CompiledOps;
+        }
+        if (text == "metal_kernel") {
+            return qwen3_5_mlx::runtime_options::GatedDeltaMode::MetalKernel;
+        }
+    }
+    return qwen3_5_mlx::runtime_options::GatedDeltaMode::Ops;
+}
+
 std::string json_escape(const std::string& s) {
     std::ostringstream out;
     for (char c : s) {
@@ -219,12 +233,14 @@ StageMap bench_mode(
     const Qwen3_5TextConfig& cfg,
     const QuantizationConfig& qc,
     qwen3_5_mlx::runtime_options::LinearCacheMode mode,
+    qwen3_5_mlx::runtime_options::GatedDeltaMode gated_delta_mode,
     int prefill_iterations,
     int decode_iterations,
     int prefill_tokens) {
     using namespace qwen3_5_mlx;
 
     runtime_options::set_linear_cache_mode(mode);
+    runtime_options::set_gated_delta_mode(gated_delta_mode);
     GatedDeltaNet linear;
     linear.num_k_heads = cfg.linear_num_key_heads;
     linear.num_v_heads = cfg.linear_num_value_heads;
@@ -292,16 +308,20 @@ int main(int argc, char* argv[]) {
     const int prefill_tokens = argc >= 4 ? std::atoi(argv[3]) : 64;
     const int prefill_iterations = argc >= 5 ? std::atoi(argv[4]) : 20;
     const int decode_iterations = argc >= 6 ? std::atoi(argv[5]) : 128;
+    const auto gated_delta_mode = gated_delta_mode_from_env();
 
     const Qwen3_5Config config = Qwen3_5Config::from_file(config_path);
     const QuantizationConfig qc = load_quant_config(config_path);
 
-    auto legacy = bench_mode(config.text_config, qc, qwen3_5_mlx::runtime_options::LinearCacheMode::Legacy, prefill_iterations, decode_iterations, prefill_tokens);
-    auto arrays = bench_mode(config.text_config, qc, qwen3_5_mlx::runtime_options::LinearCacheMode::ArraysStyle, prefill_iterations, decode_iterations, prefill_tokens);
+    auto legacy = bench_mode(config.text_config, qc, qwen3_5_mlx::runtime_options::LinearCacheMode::Legacy, gated_delta_mode, prefill_iterations, decode_iterations, prefill_tokens);
+    auto arrays = bench_mode(config.text_config, qc, qwen3_5_mlx::runtime_options::LinearCacheMode::ArraysStyle, gated_delta_mode, prefill_iterations, decode_iterations, prefill_tokens);
 
     fs::create_directories(fs::path(output_path).parent_path());
     std::ofstream out(output_path);
     out << "{\n";
+    out << "  \"gated_delta_mode\": \""
+        << qwen3_5_mlx::runtime_options::gated_delta_mode_name(gated_delta_mode)
+        << "\",\n";
     out << "  \"prefill_tokens\": " << prefill_tokens << ",\n";
     out << "  \"prefill_iterations\": " << prefill_iterations << ",\n";
     out << "  \"decode_iterations\": " << decode_iterations << ",\n";

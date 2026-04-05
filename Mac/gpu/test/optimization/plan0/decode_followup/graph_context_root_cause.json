@@ -1,0 +1,172 @@
+{
+  "generated_at": "2026-04-05T09:22:15",
+  "base_vs_custom_legacy": {
+    "trace_decode_ms": {
+      "base": 184.89,
+      "custom_legacy": 195.01,
+      "delta_ms": 10.12
+    },
+    "linear_stage_sync_delta": [
+      {
+        "stage": "linear_attention_in_proj_qkv",
+        "base_sync_ms": 497.425,
+        "custom_sync_ms": 567.638,
+        "sync_delta_ms": 70.213
+      },
+      {
+        "stage": "linear_attention_in_proj_z",
+        "base_sync_ms": 329.677,
+        "custom_sync_ms": 375.668,
+        "sync_delta_ms": 45.991
+      },
+      {
+        "stage": "linear_attention_gated_delta",
+        "base_sync_ms": 194.821,
+        "custom_sync_ms": 209.167,
+        "sync_delta_ms": 14.346
+      },
+      {
+        "stage": "linear_attention_conv1d",
+        "base_sync_ms": 144.174,
+        "custom_sync_ms": 152.126,
+        "sync_delta_ms": 7.952
+      },
+      {
+        "stage": "linear_attention_norm_gated",
+        "base_sync_ms": 146.251,
+        "custom_sync_ms": 151.019,
+        "sync_delta_ms": 4.768
+      },
+      {
+        "stage": "linear_attention",
+        "base_sync_ms": 12.566,
+        "custom_sync_ms": 12.438,
+        "sync_delta_ms": -0.128
+      },
+      {
+        "stage": "linear_attention_q_norm",
+        "base_sync_ms": 144.885,
+        "custom_sync_ms": 142.359,
+        "sync_delta_ms": -2.526
+      },
+      {
+        "stage": "linear_attention_in_proj_a",
+        "base_sync_ms": 161.13,
+        "custom_sync_ms": 157.317,
+        "sync_delta_ms": -3.813
+      },
+      {
+        "stage": "linear_attention_in_proj_b",
+        "base_sync_ms": 175.296,
+        "custom_sync_ms": 170.817,
+        "sync_delta_ms": -4.479
+      },
+      {
+        "stage": "linear_attention_k_norm",
+        "base_sync_ms": 147.067,
+        "custom_sync_ms": 140.53,
+        "sync_delta_ms": -6.537
+      },
+      {
+        "stage": "linear_cache_conv_state_update",
+        "base_sync_ms": 153.746,
+        "custom_sync_ms": 144.109,
+        "sync_delta_ms": -9.637
+      },
+      {
+        "stage": "linear_cache_rec_state_update",
+        "base_sync_ms": 25.051,
+        "custom_sync_ms": 12.204,
+        "sync_delta_ms": -12.847
+      },
+      {
+        "stage": "linear_cache_update",
+        "base_sync_ms": 178.797,
+        "custom_sync_ms": 156.314,
+        "sync_delta_ms": -22.483
+      },
+      {
+        "stage": "linear_attention_out_proj",
+        "base_sync_ms": 454.051,
+        "custom_sync_ms": 386.589,
+        "sync_delta_ms": -67.462
+      }
+    ],
+    "attention_stage_sync_delta": [
+      {
+        "stage": "full_attention_q_proj",
+        "base_sync_ms": 168.368,
+        "custom_sync_ms": 189.593,
+        "sync_delta_ms": 21.225
+      },
+      {
+        "stage": "full_attention_cache_update",
+        "base_sync_ms": 59.892,
+        "custom_sync_ms": 65.997,
+        "sync_delta_ms": 6.105
+      },
+      {
+        "stage": "full_attention",
+        "base_sync_ms": 5.546,
+        "custom_sync_ms": 4.872,
+        "sync_delta_ms": -0.674
+      },
+      {
+        "stage": "full_attention_sdpa",
+        "base_sync_ms": 67.561,
+        "custom_sync_ms": 65.889,
+        "sync_delta_ms": -1.672
+      },
+      {
+        "stage": "full_attention_o_proj",
+        "base_sync_ms": 144.288,
+        "custom_sync_ms": 129.757,
+        "sync_delta_ms": -14.531
+      }
+    ]
+  },
+  "step_buffer_effect": {
+    "trace_decode_ms": {
+      "legacy": 195.01,
+      "step_buffer": 198.283,
+      "delta_ms": 3.273
+    },
+    "no_trace_decode_ms": {
+      "legacy": 108.99,
+      "step_buffer": 110.33,
+      "delta_ms": 1.34
+    },
+    "attention_stage_sync_change": [
+      {
+        "stage": "full_attention_cache_update",
+        "legacy_sync_ms": 65.997,
+        "step_sync_ms": 60.072,
+        "step_minus_legacy_ms": -5.925
+      },
+      {
+        "stage": "full_attention_o_proj",
+        "legacy_sync_ms": 129.757,
+        "step_sync_ms": 133.829,
+        "step_minus_legacy_ms": 4.072
+      },
+      {
+        "stage": "full_attention_q_proj",
+        "legacy_sync_ms": 189.593,
+        "step_sync_ms": 192.877,
+        "step_minus_legacy_ms": 3.284
+      },
+      {
+        "stage": "full_attention_sdpa",
+        "legacy_sync_ms": 65.889,
+        "step_sync_ms": 68.707,
+        "step_minus_legacy_ms": 2.818
+      },
+      {
+        "stage": "full_attention",
+        "legacy_sync_ms": 4.872,
+        "step_sync_ms": 4.663,
+        "step_minus_legacy_ms": -0.209
+      }
+    ]
+  }
+}

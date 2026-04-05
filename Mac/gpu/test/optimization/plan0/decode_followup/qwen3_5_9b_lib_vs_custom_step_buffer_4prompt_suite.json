@@ -1,0 +1,22 @@
+[
+  {
+    "id": "short_03",
+    "kind": "short",
+    "prompt_text": "Summarize the purpose of a KV cache."
+  },
+  {
+    "id": "short_10",
+    "kind": "short",
+    "prompt_text": "What does latency mean in computing?"
+  },
+  {
+    "id": "long_03",
+    "kind": "long",
+    "prompt_text": "Describe how a GPU inference engine typically processes a prompt and then decodes new tokens. Include the roles of prefill, KV cache, and decode steps, but keep the explanation readable for an engineer who is not a specialist in LLM serving."
+  },
+  {
+    "id": "long_09",
+    "kind": "long",
+    "prompt_text": "Explain residual connections in transformer-style models. Describe why they help optimization, what would happen if they were removed, and how they interact with normalization layers."
+  }
+]

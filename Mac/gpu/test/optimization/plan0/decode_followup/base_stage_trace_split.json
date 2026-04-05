@@ -1,0 +1,1990 @@
+{
+  "generated_at": "2026-04-05T09:20:02",
+  "mode": "base_stage_trace_split",
+  "model_dir": "/Volumes/990pro/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-8bit",
+  "prompt_suite": "/Volumes/990pro/Documents/SoC/Mac/gpu/test/optimization/plan_0/operator_hook_test/prompt_suite.json",
+  "max_new_tokens": 32,
+  "rows": [
+    {
+      "id": "short_03",
+      "kind": "short",
+      "prompt_text": "Summarize the purpose of a KV cache.",
+      "prompt_tokens": [
+        248045,
+        846,
+        198,
+        8917,
+        5437,
+        537,
+        279,
+        7193,
+        314,
+        264,
+        81726,
+        6297,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ],
+      "prompt_token_count": 22,
+      "generated_tokens": [
+        760,
+        5839,
+        7193,
+        314,
+        2972,
+        79852,
+        6297,
+        332,
+        318,
+        1536,
+        12,
+        1094,
+        6297,
+        8,
+        303,
+        19670,
+        11106,
+        26012,
+        318,
+        3950,
+        20971,
+        8,
+        369,
+        310,
+        2972,
+        67,
+        2319,
+        6804,
+        7698,
+        52652,
+        2695,
+        321
+      ],
+      "generated_token_count": 32,
+      "output_text": "The primary purpose of **KV cache** (Key-Value cache) in Large Language Models (LLMs) is to **dramatically reduce computational cost and",
+      "prefill_ms": 817.082,
+      "decode_ms": 185.858,
+      "wall_ms": 6765.137,
+      "throughput": 4.73,
+      "peak_memory_gb": 0.0,
+      "stage_trace": {
+        "prefill": {
+          "final_norm": {
+            "calls": 1,
+            "dispatch_ms": 0.004,
+            "sync_ms": 0.227
+          },
+          "full_attention": {
+            "calls": 8,
+            "dispatch_ms": 60.189,
+            "sync_ms": 0.13
+          },
+          "full_attention_cache_update": {
+            "calls": 8,
+            "dispatch_ms": 0.094,
+            "sync_ms": 2.874
+          },
+          "full_attention_k_norm": {
+            "calls": 8,
+            "dispatch_ms": 0.033,
+            "sync_ms": 1.822
+          },
+          "full_attention_k_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.034,
+            "sync_ms": 4.847
+          },
+          "full_attention_o_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.038,
+            "sync_ms": 12.032
+          },
+          "full_attention_q_norm": {
+            "calls": 8,
+            "dispatch_ms": 0.043,
+            "sync_ms": 2.033
+          },
+          "full_attention_q_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.026,
+            "sync_ms": 21.03
+          },
+          "full_attention_rope": {
+            "calls": 8,
+            "dispatch_ms": 0.31,
+            "sync_ms": 5.658
+          },
+          "full_attention_sdpa": {
+            "calls": 8,
+            "dispatch_ms": 0.124,
+            "sync_ms": 3.784
+          },
+          "full_attention_v_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.033,
+            "sync_ms": 4.844
+          },
+          "input_embeddings": {
+            "calls": 1,
+            "dispatch_ms": 0.02,
+            "sync_ms": 108.984
+          },
+          "kv_cache_update": {
+            "calls": 8,
+            "dispatch_ms": 0.094,
+            "sync_ms": 2.874
+          },
+          "linear_attention": {
+            "calls": 24,
+            "dispatch_ms": 226.597,
+            "sync_ms": 0.378
+          },
+          "linear_attention_conv1d": {
+            "calls": 24,
+            "dispatch_ms": 0.313,
+            "sync_ms": 9.458
+          },
+          "linear_attention_gated_delta": {
+            "calls": 24,
+            "dispatch_ms": 0.828,
+            "sync_ms": 14.497
+          },
+          "linear_attention_in_proj_a": {
+            "calls": 24,
+            "dispatch_ms": 0.065,
+            "sync_ms": 9.603
+          },
+          "linear_attention_in_proj_b": {
+            "calls": 24,
+            "dispatch_ms": 0.15,
+            "sync_ms": 10.691
+          },
+          "linear_attention_in_proj_qkv": {
+            "calls": 24,
+            "dispatch_ms": 0.088,
+            "sync_ms": 75.281
+          },
+          "linear_attention_in_proj_z": {
+            "calls": 24,
+            "dispatch_ms": 0.199,
+            "sync_ms": 39.574
+          },
+          "linear_attention_k_norm": {
+            "calls": 24,
+            "dispatch_ms": 0.06,
+            "sync_ms": 5.071
+          },
+          "linear_attention_norm_gated": {
+            "calls": 24,
+            "dispatch_ms": 0.195,
+            "sync_ms": 5.594
+          },
+          "linear_attention_out_proj": {
+            "calls": 24,
+            "dispatch_ms": 0.055,
+            "sync_ms": 38.272
+          },
+          "linear_attention_q_norm": {
+            "calls": 24,
+            "dispatch_ms": 0.121,
+            "sync_ms": 6.035
+          },
+          "linear_cache_conv_state_update": {
+            "calls": 48,
+            "dispatch_ms": 0.144,
+            "sync_ms": 8.105
+          },
+          "linear_cache_rec_state_update": {
+            "calls": 48,
+            "dispatch_ms": 0.014,
+            "sync_ms": 0.795
+          },
+          "linear_cache_update": {
+            "calls": 96,
+            "dispatch_ms": 0.157,
+            "sync_ms": 8.9
+          },
+          "lm_head": {
+            "calls": 1,
+            "dispatch_ms": 0.002,
+            "sync_ms": 45.0
+          },
+          "mlp": {
+            "calls": 32,
+            "dispatch_ms": 0.3,
+            "sync_ms": 364.507
+          },
+          "position_ids": {
+            "calls": 1,
+            "dispatch_ms": 0.033,
+            "sync_ms": 9.757
+          },
+          "rope": {
+            "calls": 8,
+            "dispatch_ms": 0.31,
+            "sync_ms": 5.658
+          },
+          "sampler_sync(argmax/item)": {
+            "calls": 1,
+            "dispatch_ms": 0.017,
+            "sync_ms": 0.565
+          }
+        },
+        "decode": {
+          "final_norm": {
+            "calls": 31,
+            "dispatch_ms": 0.094,
+            "sync_ms": 7.649
+          },
+          "full_attention": {
+            "calls": 248,
+            "dispatch_ms": 775.861,
+            "sync_ms": 4.268
+          },
+          "full_attention_cache_update": {
+            "calls": 248,
+            "dispatch_ms": 1.809,
+            "sync_ms": 60.878
+          },
+          "full_attention_k_norm": {
+            "calls": 248,
+            "dispatch_ms": 0.827,
+            "sync_ms": 46.139
+          },
+          "full_attention_k_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.614,
+            "sync_ms": 68.438
+          },
+          "full_attention_o_proj": {
+            "calls": 248,
+            "dispatch_ms": 1.009,
+            "sync_ms": 150.743
+          },
+          "full_attention_q_norm": {
+            "calls": 248,
+            "dispatch_ms": 0.817,
+            "sync_ms": 54.173
+          },
+          "full_attention_q_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.474,
+            "sync_ms": 167.811
+          },
+          "full_attention_rope": {
+            "calls": 248,
+            "dispatch_ms": 6.197,
+            "sync_ms": 66.635
+          },
+          "full_attention_sdpa": {
+            "calls": 248,
+            "dispatch_ms": 1.149,
+            "sync_ms": 66.754
+          },
+          "full_attention_v_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.657,
+            "sync_ms": 68.135
+          },
+          "input_embeddings": {
+            "calls": 31,
+            "dispatch_ms": 0.299,
+            "sync_ms": 6.741
+          },
+          "kv_cache_update": {
+            "calls": 248,
+            "dispatch_ms": 1.809,
+            "sync_ms": 60.878
+          },
+          "linear_attention": {
+            "calls": 744,
+            "dispatch_ms": 2669.086,
+            "sync_ms": 12.632
+          },
+          "linear_attention_conv1d": {
+            "calls": 744,
+            "dispatch_ms": 3.944,
+            "sync_ms": 143.34
+          },
+          "linear_attention_gated_delta": {
+            "calls": 744,
+            "dispatch_ms": 16.933,
+            "sync_ms": 193.415
+          },
+          "linear_attention_in_proj_a": {
+            "calls": 744,
+            "dispatch_ms": 1.591,
+            "sync_ms": 166.514
+          },
+          "linear_attention_in_proj_b": {
+            "calls": 744,
+            "dispatch_ms": 1.738,
+            "sync_ms": 185.873
+          },
+          "linear_attention_in_proj_qkv": {
+            "calls": 744,
+            "dispatch_ms": 1.484,
+            "sync_ms": 483.476
+          },
+          "linear_attention_in_proj_z": {
+            "calls": 744,
+            "dispatch_ms": 4.084,
+            "sync_ms": 320.999
+          },
+          "linear_attention_k_norm": {
+            "calls": 744,
+            "dispatch_ms": 1.872,
+            "sync_ms": 145.05
+          },
+          "linear_attention_norm_gated": {
+            "calls": 744,
+            "dispatch_ms": 3.923,
+            "sync_ms": 145.974
+          },
+          "linear_attention_out_proj": {
+            "calls": 744,
+            "dispatch_ms": 1.838,
+            "sync_ms": 493.175
+          },
+          "linear_attention_q_norm": {
+            "calls": 744,
+            "dispatch_ms": 1.887,
+            "sync_ms": 145.486
+          },
+          "linear_cache_conv_state_update": {
+            "calls": 1488,
+            "dispatch_ms": 1.943,
+            "sync_ms": 152.37
+          },
+          "linear_cache_rec_state_update": {
+            "calls": 1488,
+            "dispatch_ms": 0.906,
+            "sync_ms": 25.39
+          },
+          "linear_cache_update": {
+            "calls": 2976,
+            "dispatch_ms": 2.85,
+            "sync_ms": 177.761
+          },
+          "lm_head": {
+            "calls": 31,
+            "dispatch_ms": 0.09,
+            "sync_ms": 334.696
+          },
+          "mlp": {
+            "calls": 992,
+            "dispatch_ms": 6.42,
+            "sync_ms": 2096.502
+          },
+          "position_ids": {
+            "calls": 31,
+            "dispatch_ms": 0.452,
+            "sync_ms": 7.716
+          },
+          "rope": {
+            "calls": 248,
+            "dispatch_ms": 6.197,
+            "sync_ms": 66.635
+          },
+          "sampler_sync(argmax/item)": {
+            "calls": 31,
+            "dispatch_ms": 0.061,
+            "sync_ms": 9.939
+          }
+        }
+      }
+    },
+    {
+      "id": "short_10",
+      "kind": "short",
+      "prompt_text": "What does latency mean in computing?",
+      "prompt_tokens": [
+        248045,
+        846,
+        198,
+        3710,
+        1503,
+        37972,
+        2977,
+        303,
+        23470,
+        30,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ],
+      "prompt_token_count": 19,
+      "generated_tokens": [
+        623,
+        23470,
+        11,
+        2972,
+        5351,
+        2179,
+        332,
+        18675,
+        310,
+        279,
+        854,
+        7383,
+        1881,
+        279,
+        58430,
+        314,
+        264,
+        1622,
+        321,
+        279,
+        1151,
+        314,
+        279,
+        1965,
+        13,
+        1049,
+        369,
+        15327,
+        279,
+        328,
+        47869,
+        854
+      ],
+      "generated_token_count": 32,
+      "output_text": "In computing, **latency** refers to the time delay between the initiation of a request and the start of the response. It is essentially the \"waiting time",
+      "prefill_ms": 403.156,
+      "decode_ms": 184.3,
+      "wall_ms": 6301.046,
+      "throughput": 5.079,
+      "peak_memory_gb": 0.0,
+      "stage_trace": {
+        "prefill": {
+          "final_norm": {
+            "calls": 1,
+            "dispatch_ms": 0.002,
+            "sync_ms": 0.198
+          },
+          "full_attention": {
+            "calls": 8,
+            "dispatch_ms": 38.96,
+            "sync_ms": 0.165
+          },
+          "full_attention_cache_update": {
+            "calls": 8,
+            "dispatch_ms": 0.089,
+            "sync_ms": 2.143
+          },
+          "full_attention_k_norm": {
+            "calls": 8,
+            "dispatch_ms": 0.027,
+            "sync_ms": 1.38
+          },
+          "full_attention_k_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.022,
+            "sync_ms": 4.163
+          },
+          "full_attention_o_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.038,
+            "sync_ms": 7.47
+          },
+          "full_attention_q_norm": {
+            "calls": 8,
+            "dispatch_ms": 0.038,
+            "sync_ms": 1.92
+          },
+          "full_attention_q_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.02,
+            "sync_ms": 11.918
+          },
+          "full_attention_rope": {
+            "calls": 8,
+            "dispatch_ms": 0.369,
+            "sync_ms": 2.203
+          },
+          "full_attention_sdpa": {
+            "calls": 8,
+            "dispatch_ms": 0.123,
+            "sync_ms": 2.523
+          },
+          "full_attention_v_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.028,
+            "sync_ms": 3.973
+          },
+          "input_embeddings": {
+            "calls": 1,
+            "dispatch_ms": 0.019,
+            "sync_ms": 0.248
+          },
+          "kv_cache_update": {
+            "calls": 8,
+            "dispatch_ms": 0.089,
+            "sync_ms": 2.143
+          },
+          "linear_attention": {
+            "calls": 24,
+            "dispatch_ms": 146.892,
+            "sync_ms": 0.37
+          },
+          "linear_attention_conv1d": {
+            "calls": 24,
+            "dispatch_ms": 0.259,
+            "sync_ms": 5.95
+          },
+          "linear_attention_gated_delta": {
+            "calls": 24,
+            "dispatch_ms": 0.929,
+            "sync_ms": 11.023
+          },
+          "linear_attention_in_proj_a": {
+            "calls": 24,
+            "dispatch_ms": 0.062,
+            "sync_ms": 9.923
+          },
+          "linear_attention_in_proj_b": {
+            "calls": 24,
+            "dispatch_ms": 0.121,
+            "sync_ms": 10.096
+          },
+          "linear_attention_in_proj_qkv": {
+            "calls": 24,
+            "dispatch_ms": 0.076,
+            "sync_ms": 37.05
+          },
+          "linear_attention_in_proj_z": {
+            "calls": 24,
+            "dispatch_ms": 0.159,
+            "sync_ms": 23.132
+          },
+          "linear_attention_k_norm": {
+            "calls": 24,
+            "dispatch_ms": 0.074,
+            "sync_ms": 4.848
+          },
+          "linear_attention_norm_gated": {
+            "calls": 24,
+            "dispatch_ms": 0.241,
+            "sync_ms": 4.977
+          },
+          "linear_attention_out_proj": {
+            "calls": 24,
+            "dispatch_ms": 0.06,
+            "sync_ms": 22.824
+          },
+          "linear_attention_q_norm": {
+            "calls": 24,
+            "dispatch_ms": 0.141,
+            "sync_ms": 5.11
+          },
+          "linear_cache_conv_state_update": {
+            "calls": 48,
+            "dispatch_ms": 0.157,
+            "sync_ms": 7.577
+          },
+          "linear_cache_rec_state_update": {
+            "calls": 48,
+            "dispatch_ms": 0.011,
+            "sync_ms": 0.748
+          },
+          "linear_cache_update": {
+            "calls": 96,
+            "dispatch_ms": 0.169,
+            "sync_ms": 8.325
+          },
+          "lm_head": {
+            "calls": 1,
+            "dispatch_ms": 0.003,
+            "sync_ms": 29.841
+          },
+          "mlp": {
+            "calls": 32,
+            "dispatch_ms": 0.252,
+            "sync_ms": 184.738
+          },
+          "position_ids": {
+            "calls": 1,
+            "dispatch_ms": 0.024,
+            "sync_ms": 0.695
+          },
+          "rope": {
+            "calls": 8,
+            "dispatch_ms": 0.369,
+            "sync_ms": 2.203
+          },
+          "sampler_sync(argmax/item)": {
+            "calls": 1,
+            "dispatch_ms": 0.002,
+            "sync_ms": 0.287
+          }
+        },
+        "decode": {
+          "final_norm": {
+            "calls": 31,
+            "dispatch_ms": 0.082,
+            "sync_ms": 6.293
+          },
+          "full_attention": {
+            "calls": 248,
+            "dispatch_ms": 765.711,
+            "sync_ms": 9.21
+          },
+          "full_attention_cache_update": {
+            "calls": 248,
+            "dispatch_ms": 1.777,
+            "sync_ms": 58.802
+          },
+          "full_attention_k_norm": {
+            "calls": 248,
+            "dispatch_ms": 0.741,
+            "sync_ms": 46.326
+          },
+          "full_attention_k_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.648,
+            "sync_ms": 72.563
+          },
+          "full_attention_o_proj": {
+            "calls": 248,
+            "dispatch_ms": 1.018,
+            "sync_ms": 142.372
+          },
+          "full_attention_q_norm": {
+            "calls": 248,
+            "dispatch_ms": 0.816,
+            "sync_ms": 49.956
+          },
+          "full_attention_q_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.486,
+            "sync_ms": 167.02
+          },
+          "full_attention_rope": {
+            "calls": 248,
+            "dispatch_ms": 6.948,
+            "sync_ms": 64.449
+          },
+          "full_attention_sdpa": {
+            "calls": 248,
+            "dispatch_ms": 1.321,
+            "sync_ms": 66.772
+          },
+          "full_attention_v_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.701,
+            "sync_ms": 70.116
+          },
+          "input_embeddings": {
+            "calls": 31,
+            "dispatch_ms": 0.285,
+            "sync_ms": 13.673
+          },
+          "kv_cache_update": {
+            "calls": 248,
+            "dispatch_ms": 1.777,
+            "sync_ms": 58.802
+          },
+          "linear_attention": {
+            "calls": 744,
+            "dispatch_ms": 2617.661,
+            "sync_ms": 12.483
+          },
+          "linear_attention_conv1d": {
+            "calls": 744,
+            "dispatch_ms": 4.443,
+            "sync_ms": 144.702
+          },
+          "linear_attention_gated_delta": {
+            "calls": 744,
+            "dispatch_ms": 18.768,
+            "sync_ms": 193.036
+          },
+          "linear_attention_in_proj_a": {
+            "calls": 744,
+            "dispatch_ms": 1.527,
+            "sync_ms": 155.606
+          },
+          "linear_attention_in_proj_b": {
+            "calls": 744,
+            "dispatch_ms": 1.877,
+            "sync_ms": 169.608
+          },
+          "linear_attention_in_proj_qkv": {
+            "calls": 744,
+            "dispatch_ms": 1.768,
+            "sync_ms": 497.455
+          },
+          "linear_attention_in_proj_z": {
+            "calls": 744,
+            "dispatch_ms": 3.793,
+            "sync_ms": 330.587
+          },
+          "linear_attention_k_norm": {
+            "calls": 744,
+            "dispatch_ms": 1.815,
+            "sync_ms": 143.088
+          },
+          "linear_attention_norm_gated": {
+            "calls": 744,
+            "dispatch_ms": 3.862,
+            "sync_ms": 141.55
+          },
+          "linear_attention_out_proj": {
+            "calls": 744,
+            "dispatch_ms": 1.607,
+            "sync_ms": 447.047
+          },
+          "linear_attention_q_norm": {
+            "calls": 744,
+            "dispatch_ms": 2.183,
+            "sync_ms": 147.243
+          },
+          "linear_cache_conv_state_update": {
+            "calls": 1488,
+            "dispatch_ms": 2.318,
+            "sync_ms": 153.163
+          },
+          "linear_cache_rec_state_update": {
+            "calls": 1488,
+            "dispatch_ms": 0.865,
+            "sync_ms": 23.829
+          },
+          "linear_cache_update": {
+            "calls": 2976,
+            "dispatch_ms": 3.183,
+            "sync_ms": 176.992
+          },
+          "lm_head": {
+            "calls": 31,
+            "dispatch_ms": 0.072,
+            "sync_ms": 349.672
+          },
+          "mlp": {
+            "calls": 992,
+            "dispatch_ms": 6.471,
+            "sync_ms": 2082.438
+          },
+          "position_ids": {
+            "calls": 31,
+            "dispatch_ms": 0.493,
+            "sync_ms": 6.367
+          },
+          "rope": {
+            "calls": 248,
+            "dispatch_ms": 6.948,
+            "sync_ms": 64.449
+          },
+          "sampler_sync(argmax/item)": {
+            "calls": 31,
+            "dispatch_ms": 0.066,
+            "sync_ms": 9.767
+          }
+        }
+      }
+    },
+    {
+      "id": "long_03",
+      "kind": "long",
+      "prompt_text": "Describe how a GPU inference engine typically processes a prompt and then decodes new tokens. Include the roles of prefill, KV cache, and decode steps, but keep the explanation readable for an engineer who is not a specialist in LLM serving.",
+      "prompt_tokens": [
+        248045,
+        846,
+        198,
+        72240,
+        1204,
+        264,
+        21966,
+        42903,
+        4560,
+        10813,
+        11036,
+        264,
+        9640,
+        321,
+        1179,
+        1566,
+        2458,
+        491,
+        10885,
+        13,
+        28763,
+        279,
+        12417,
+        314,
+        829,
+        7320,
+        11,
+        81726,
+        6297,
+        11,
+        321,
+        16401,
+        7123,
+        11,
+        694,
+        2426,
+        279,
+        15673,
+        32680,
+        364,
+        449,
+        22839,
+        852,
+        369,
+        524,
+        264,
+        23011,
+        303,
+        436,
+        10673,
+        13092,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ],
+      "prompt_token_count": 61,
+      "generated_tokens": [
+        4350,
+        449,
+        22839,
+        80291,
+        440,
+        264,
+        19670,
+        11106,
+        4744,
+        318,
+        3950,
+        44,
+        8,
+        42903,
+        4560,
+        11,
+        781,
+        513,
+        15327,
+        17610,
+        264,
+        14855,
+        421,
+        37568,
+        1330,
+        12103,
+        52652,
+        33286,
+        25,
+        2972,
+        29554,
+        473
+      ],
+      "generated_token_count": 32,
+      "output_text": "When an engineer interacts with a Large Language Model (LLM) inference engine, they are essentially managing a pipeline that balances two distinct computational phases: **prefill",
+      "prefill_ms": 478.915,
+      "decode_ms": 183.486,
+      "wall_ms": 6350.792,
+      "throughput": 5.039,
+      "peak_memory_gb": 0.0,
+      "stage_trace": {
+        "prefill": {
+          "final_norm": {
+            "calls": 1,
+            "dispatch_ms": 0.004,
+            "sync_ms": 0.245
+          },
+          "full_attention": {
+            "calls": 8,
+            "dispatch_ms": 42.68,
+            "sync_ms": 0.159
+          },
+          "full_attention_cache_update": {
+            "calls": 8,
+            "dispatch_ms": 0.089,
+            "sync_ms": 2.234
+          },
+          "full_attention_k_norm": {
+            "calls": 8,
+            "dispatch_ms": 0.028,
+            "sync_ms": 1.557
+          },
+          "full_attention_k_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.028,
+            "sync_ms": 3.812
+          },
+          "full_attention_o_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.035,
+            "sync_ms": 8.513
+          },
+          "full_attention_q_norm": {
+            "calls": 8,
+            "dispatch_ms": 0.033,
+            "sync_ms": 1.982
+          },
+          "full_attention_q_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.022,
+            "sync_ms": 14.592
+          },
+          "full_attention_rope": {
+            "calls": 8,
+            "dispatch_ms": 0.283,
+            "sync_ms": 2.276
+          },
+          "full_attention_sdpa": {
+            "calls": 8,
+            "dispatch_ms": 0.114,
+            "sync_ms": 2.808
+          },
+          "full_attention_v_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.031,
+            "sync_ms": 3.792
+          },
+          "input_embeddings": {
+            "calls": 1,
+            "dispatch_ms": 0.009,
+            "sync_ms": 0.299
+          },
+          "kv_cache_update": {
+            "calls": 8,
+            "dispatch_ms": 0.089,
+            "sync_ms": 2.234
+          },
+          "linear_attention": {
+            "calls": 24,
+            "dispatch_ms": 163.978,
+            "sync_ms": 0.404
+          },
+          "linear_attention_conv1d": {
+            "calls": 24,
+            "dispatch_ms": 0.242,
+            "sync_ms": 6.57
+          },
+          "linear_attention_gated_delta": {
+            "calls": 24,
+            "dispatch_ms": 0.843,
+            "sync_ms": 15.977
+          },
+          "linear_attention_in_proj_a": {
+            "calls": 24,
+            "dispatch_ms": 0.061,
+            "sync_ms": 7.513
+          },
+          "linear_attention_in_proj_b": {
+            "calls": 24,
+            "dispatch_ms": 0.107,
+            "sync_ms": 8.465
+          },
+          "linear_attention_in_proj_qkv": {
+            "calls": 24,
+            "dispatch_ms": 0.084,
+            "sync_ms": 45.137
+          },
+          "linear_attention_in_proj_z": {
+            "calls": 24,
+            "dispatch_ms": 0.121,
+            "sync_ms": 25.989
+          },
+          "linear_attention_k_norm": {
+            "calls": 24,
+            "dispatch_ms": 0.068,
+            "sync_ms": 5.354
+          },
+          "linear_attention_norm_gated": {
+            "calls": 24,
+            "dispatch_ms": 0.165,
+            "sync_ms": 6.065
+          },
+          "linear_attention_out_proj": {
+            "calls": 24,
+            "dispatch_ms": 0.07,
+            "sync_ms": 25.437
+          },
+          "linear_attention_q_norm": {
+            "calls": 24,
+            "dispatch_ms": 0.105,
+            "sync_ms": 6.831
+          },
+          "linear_cache_conv_state_update": {
+            "calls": 48,
+            "dispatch_ms": 0.123,
+            "sync_ms": 6.582
+          },
+          "linear_cache_rec_state_update": {
+            "calls": 48,
+            "dispatch_ms": 0.013,
+            "sync_ms": 0.86
+          },
+          "linear_cache_update": {
+            "calls": 96,
+            "dispatch_ms": 0.137,
+            "sync_ms": 7.442
+          },
+          "lm_head": {
+            "calls": 1,
+            "dispatch_ms": 0.003,
+            "sync_ms": 41.032
+          },
+          "mlp": {
+            "calls": 32,
+            "dispatch_ms": 0.315,
+            "sync_ms": 228.806
+          },
+          "position_ids": {
+            "calls": 1,
+            "dispatch_ms": 0.02,
+            "sync_ms": 0.186
+          },
+          "rope": {
+            "calls": 8,
+            "dispatch_ms": 0.283,
+            "sync_ms": 2.276
+          },
+          "sampler_sync(argmax/item)": {
+            "calls": 1,
+            "dispatch_ms": 0.002,
+            "sync_ms": 0.302
+          }
+        },
+        "decode": {
+          "final_norm": {
+            "calls": 31,
+            "dispatch_ms": 0.083,
+            "sync_ms": 6.767
+          },
+          "full_attention": {
+            "calls": 248,
+            "dispatch_ms": 769.577,
+            "sync_ms": 4.435
+          },
+          "full_attention_cache_update": {
+            "calls": 248,
+            "dispatch_ms": 1.87,
+            "sync_ms": 59.495
+          },
+          "full_attention_k_norm": {
+            "calls": 248,
+            "dispatch_ms": 0.809,
+            "sync_ms": 47.167
+          },
+          "full_attention_k_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.675,
+            "sync_ms": 73.018
+          },
+          "full_attention_o_proj": {
+            "calls": 248,
+            "dispatch_ms": 1.021,
+            "sync_ms": 139.794
+          },
+          "full_attention_q_norm": {
+            "calls": 248,
+            "dispatch_ms": 0.887,
+            "sync_ms": 50.621
+          },
+          "full_attention_q_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.509,
+            "sync_ms": 168.076
+          },
+          "full_attention_rope": {
+            "calls": 248,
+            "dispatch_ms": 7.008,
+            "sync_ms": 65.302
+          },
+          "full_attention_sdpa": {
+            "calls": 248,
+            "dispatch_ms": 1.331,
+            "sync_ms": 67.294
+          },
+          "full_attention_v_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.696,
+            "sync_ms": 70.689
+          },
+          "input_embeddings": {
+            "calls": 31,
+            "dispatch_ms": 0.289,
+            "sync_ms": 6.789
+          },
+          "kv_cache_update": {
+            "calls": 248,
+            "dispatch_ms": 1.87,
+            "sync_ms": 59.495
+          },
+          "linear_attention": {
+            "calls": 744,
+            "dispatch_ms": 2628.737,
+            "sync_ms": 12.805
+          },
+          "linear_attention_conv1d": {
+            "calls": 744,
+            "dispatch_ms": 4.594,
+            "sync_ms": 145.988
+          },
+          "linear_attention_gated_delta": {
+            "calls": 744,
+            "dispatch_ms": 19.504,
+            "sync_ms": 195.307
+          },
+          "linear_attention_in_proj_a": {
+            "calls": 744,
+            "dispatch_ms": 1.638,
+            "sync_ms": 157.47
+          },
+          "linear_attention_in_proj_b": {
+            "calls": 744,
+            "dispatch_ms": 1.876,
+            "sync_ms": 177.958
+          },
+          "linear_attention_in_proj_qkv": {
+            "calls": 744,
+            "dispatch_ms": 1.623,
+            "sync_ms": 497.372
+          },
+          "linear_attention_in_proj_z": {
+            "calls": 744,
+            "dispatch_ms": 3.85,
+            "sync_ms": 332.568
+          },
+          "linear_attention_k_norm": {
+            "calls": 744,
+            "dispatch_ms": 1.893,
+            "sync_ms": 143.813
+          },
+          "linear_attention_norm_gated": {
+            "calls": 744,
+            "dispatch_ms": 3.974,
+            "sync_ms": 148.283
+          },
+          "linear_attention_out_proj": {
+            "calls": 744,
+            "dispatch_ms": 1.688,
+            "sync_ms": 434.075
+          },
+          "linear_attention_q_norm": {
+            "calls": 744,
+            "dispatch_ms": 2.343,
+            "sync_ms": 144.013
+          },
+          "linear_cache_conv_state_update": {
+            "calls": 1488,
+            "dispatch_ms": 2.338,
+            "sync_ms": 153.03
+          },
+          "linear_cache_rec_state_update": {
+            "calls": 1488,
+            "dispatch_ms": 0.972,
+            "sync_ms": 25.167
+          },
+          "linear_cache_update": {
+            "calls": 2976,
+            "dispatch_ms": 3.31,
+            "sync_ms": 178.197
+          },
+          "lm_head": {
+            "calls": 31,
+            "dispatch_ms": 0.083,
+            "sync_ms": 347.968
+          },
+          "mlp": {
+            "calls": 992,
+            "dispatch_ms": 6.917,
+            "sync_ms": 2054.155
+          },
+          "position_ids": {
+            "calls": 31,
+            "dispatch_ms": 0.486,
+            "sync_ms": 6.284
+          },
+          "rope": {
+            "calls": 248,
+            "dispatch_ms": 7.008,
+            "sync_ms": 65.302
+          },
+          "sampler_sync(argmax/item)": {
+            "calls": 31,
+            "dispatch_ms": 0.065,
+            "sync_ms": 9.743
+          }
+        }
+      }
+    },
+    {
+      "id": "long_09",
+      "kind": "long",
+      "prompt_text": "Explain residual connections in transformer-style models. Describe why they help optimization, what would happen if they were removed, and how they interact with normalization layers.",
+      "prompt_tokens": [
+        248045,
+        846,
+        198,
+        814,
+        20139,
+        31088,
+        12850,
+        303,
+        41163,
+        10970,
+        3983,
+        13,
+        58737,
+        3069,
+        781,
+        1438,
+        24460,
+        11,
+        1092,
+        1000,
+        3420,
+        413,
+        781,
+        998,
+        6747,
+        11,
+        321,
+        1204,
+        781,
+        15803,
+        440,
+        47096,
+        13224,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ],
+      "prompt_token_count": 43,
+      "generated_tokens": [
+        13962,
+        3437,
+        513,
+        1737,
+        3231,
+        63726,
+        30,
+        271,
+        623,
+        60277,
+        10970,
+        3983,
+        318,
+        429,
+        5365,
+        28758,
+        13750,
+        303,
+        4437,
+        681,
+        264,
+        2972,
+        408,
+        3231,
+        3511,
+        332,
+        318,
+        269,
+        10390,
+        3511,
+        8,
+        369
+      ],
+      "generated_token_count": 32,
+      "output_text": "### What are Residual Connections?\n\nIn Transformer-style models (and deep neural networks in general), a **residual connection** (or skip connection) is",
+      "prefill_ms": 445.677,
+      "decode_ms": 185.916,
+      "wall_ms": 6395.303,
+      "throughput": 5.004,
+      "peak_memory_gb": 0.0,
+      "stage_trace": {
+        "prefill": {
+          "final_norm": {
+            "calls": 1,
+            "dispatch_ms": 0.003,
+            "sync_ms": 0.163
+          },
+          "full_attention": {
+            "calls": 8,
+            "dispatch_ms": 40.685,
+            "sync_ms": 0.146
+          },
+          "full_attention_cache_update": {
+            "calls": 8,
+            "dispatch_ms": 0.085,
+            "sync_ms": 2.183
+          },
+          "full_attention_k_norm": {
+            "calls": 8,
+            "dispatch_ms": 0.028,
+            "sync_ms": 1.473
+          },
+          "full_attention_k_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.027,
+            "sync_ms": 3.683
+          },
+          "full_attention_o_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.033,
+            "sync_ms": 8.189
+          },
+          "full_attention_q_norm": {
+            "calls": 8,
+            "dispatch_ms": 0.031,
+            "sync_ms": 1.7
+          },
+          "full_attention_q_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.023,
+            "sync_ms": 13.953
+          },
+          "full_attention_rope": {
+            "calls": 8,
+            "dispatch_ms": 0.269,
+            "sync_ms": 2.129
+          },
+          "full_attention_sdpa": {
+            "calls": 8,
+            "dispatch_ms": 0.107,
+            "sync_ms": 2.816
+          },
+          "full_attention_v_proj": {
+            "calls": 8,
+            "dispatch_ms": 0.027,
+            "sync_ms": 3.482
+          },
+          "input_embeddings": {
+            "calls": 1,
+            "dispatch_ms": 0.008,
+            "sync_ms": 0.212
+          },
+          "kv_cache_update": {
+            "calls": 8,
+            "dispatch_ms": 0.085,
+            "sync_ms": 2.183
+          },
+          "linear_attention": {
+            "calls": 24,
+            "dispatch_ms": 148.755,
+            "sync_ms": 0.485
+          },
+          "linear_attention_conv1d": {
+            "calls": 24,
+            "dispatch_ms": 0.224,
+            "sync_ms": 5.915
+          },
+          "linear_attention_gated_delta": {
+            "calls": 24,
+            "dispatch_ms": 0.791,
+            "sync_ms": 11.585
+          },
+          "linear_attention_in_proj_a": {
+            "calls": 24,
+            "dispatch_ms": 0.097,
+            "sync_ms": 7.456
+          },
+          "linear_attention_in_proj_b": {
+            "calls": 24,
+            "dispatch_ms": 0.069,
+            "sync_ms": 7.556
+          },
+          "linear_attention_in_proj_qkv": {
+            "calls": 24,
+            "dispatch_ms": 0.073,
+            "sync_ms": 41.727
+          },
+          "linear_attention_in_proj_z": {
+            "calls": 24,
+            "dispatch_ms": 0.125,
+            "sync_ms": 24.264
+          },
+          "linear_attention_k_norm": {
+            "calls": 24,
+            "dispatch_ms": 0.063,
+            "sync_ms": 4.817
+          },
+          "linear_attention_norm_gated": {
+            "calls": 24,
+            "dispatch_ms": 0.155,
+            "sync_ms": 5.08
+          },
+          "linear_attention_out_proj": {
+            "calls": 24,
+            "dispatch_ms": 0.057,
+            "sync_ms": 23.665
+          },
+          "linear_attention_q_norm": {
+            "calls": 24,
+            "dispatch_ms": 0.097,
+            "sync_ms": 4.703
+          },
+          "linear_cache_conv_state_update": {
+            "calls": 48,
+            "dispatch_ms": 0.151,
+            "sync_ms": 8.111
+          },
+          "linear_cache_rec_state_update": {
+            "calls": 48,
+            "dispatch_ms": 0.012,
+            "sync_ms": 0.794
+          },
+          "linear_cache_update": {
+            "calls": 96,
+            "dispatch_ms": 0.163,
+            "sync_ms": 8.905
+          },
+          "lm_head": {
+            "calls": 1,
+            "dispatch_ms": 0.003,
+            "sync_ms": 40.493
+          },
+          "mlp": {
+            "calls": 32,
+            "dispatch_ms": 0.274,
+            "sync_ms": 213.499
+          },
+          "position_ids": {
+            "calls": 1,
+            "dispatch_ms": 0.019,
+            "sync_ms": 0.208
+          },
+          "rope": {
+            "calls": 8,
+            "dispatch_ms": 0.269,
+            "sync_ms": 2.129
+          },
+          "sampler_sync(argmax/item)": {
+            "calls": 1,
+            "dispatch_ms": 0.003,
+            "sync_ms": 0.299
+          }
+        },
+        "decode": {
+          "final_norm": {
+            "calls": 31,
+            "dispatch_ms": 0.075,
+            "sync_ms": 5.98
+          },
+          "full_attention": {
+            "calls": 248,
+            "dispatch_ms": 781.25,
+            "sync_ms": 4.27
+          },
+          "full_attention_cache_update": {
+            "calls": 248,
+            "dispatch_ms": 1.908,
+            "sync_ms": 60.395
+          },
+          "full_attention_k_norm": {
+            "calls": 248,
+            "dispatch_ms": 0.737,
+            "sync_ms": 45.675
+          },
+          "full_attention_k_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.661,
+            "sync_ms": 73.81
+          },
+          "full_attention_o_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.967,
+            "sync_ms": 144.245
+          },
+          "full_attention_q_norm": {
+            "calls": 248,
+            "dispatch_ms": 0.913,
+            "sync_ms": 49.808
+          },
+          "full_attention_q_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.495,
+            "sync_ms": 170.565
+          },
+          "full_attention_rope": {
+            "calls": 248,
+            "dispatch_ms": 6.91,
+            "sync_ms": 65.552
+          },
+          "full_attention_sdpa": {
+            "calls": 248,
+            "dispatch_ms": 1.306,
+            "sync_ms": 69.423
+          },
+          "full_attention_v_proj": {
+            "calls": 248,
+            "dispatch_ms": 0.668,
+            "sync_ms": 74.334
+          },
+          "input_embeddings": {
+            "calls": 31,
+            "dispatch_ms": 0.277,
+            "sync_ms": 6.795
+          },
+          "kv_cache_update": {
+            "calls": 248,
+            "dispatch_ms": 1.908,
+            "sync_ms": 60.395
+          },
+          "linear_attention": {
+            "calls": 744,
+            "dispatch_ms": 2663.591,
+            "sync_ms": 12.342
+          },
+          "linear_attention_conv1d": {
+            "calls": 744,
+            "dispatch_ms": 4.706,
+            "sync_ms": 142.665
+          },
+          "linear_attention_gated_delta": {
+            "calls": 744,
+            "dispatch_ms": 18.57,
+            "sync_ms": 197.527
+          },
+          "linear_attention_in_proj_a": {
+            "calls": 744,
+            "dispatch_ms": 2.243,
+            "sync_ms": 164.932
+          },
+          "linear_attention_in_proj_b": {
+            "calls": 744,
+            "dispatch_ms": 1.849,
+            "sync_ms": 167.745
+          },
+          "linear_attention_in_proj_qkv": {
+            "calls": 744,
+            "dispatch_ms": 1.615,
+            "sync_ms": 511.397
+          },
+          "linear_attention_in_proj_z": {
+            "calls": 744,
+            "dispatch_ms": 4.015,
+            "sync_ms": 334.555
+          },
+          "linear_attention_k_norm": {
+            "calls": 744,
+            "dispatch_ms": 1.798,
+            "sync_ms": 156.319
+          },
+          "linear_attention_norm_gated": {
+            "calls": 744,
+            "dispatch_ms": 3.97,
+            "sync_ms": 149.199
+          },
+          "linear_attention_out_proj": {
+            "calls": 744,
+            "dispatch_ms": 1.664,
+            "sync_ms": 441.907
+          },
+          "linear_attention_q_norm": {
+            "calls": 744,
+            "dispatch_ms": 2.339,
+            "sync_ms": 142.797
+          },
+          "linear_cache_conv_state_update": {
+            "calls": 1488,
+            "dispatch_ms": 2.371,
+            "sync_ms": 156.42
+          },
+          "linear_cache_rec_state_update": {
+            "calls": 1488,
+            "dispatch_ms": 0.969,
+            "sync_ms": 25.817
+          },
+          "linear_cache_update": {
+            "calls": 2976,
+            "dispatch_ms": 3.341,
+            "sync_ms": 182.237
+          },
+          "lm_head": {
+            "calls": 31,
+            "dispatch_ms": 0.07,
+            "sync_ms": 350.638
+          },
+          "mlp": {
+            "calls": 992,
+            "dispatch_ms": 6.725,
+            "sync_ms": 2081.719
+          },
+          "position_ids": {
+            "calls": 31,
+            "dispatch_ms": 0.472,
+            "sync_ms": 6.943
+          },
+          "rope": {
+            "calls": 248,
+            "dispatch_ms": 6.91,
+            "sync_ms": 65.552
+          },
+          "sampler_sync(argmax/item)": {
+            "calls": 31,
+            "dispatch_ms": 0.065,
+            "sync_ms": 10.723
+          }
+        }
+      }
+    }
+  ],
+  "summary": {
+    "rows": 4,
+    "avg_prompt_tokens": 36.25,
+    "avg_generated_tokens": 32.0,
+    "avg_prefill_ms": 536.207,
+    "avg_decode_ms": 184.89,
+    "avg_wall_ms": 6453.07,
+    "avg_throughput": 4.963,
+    "avg_peak_memory_gb": 0.0
+  },
+  "stage_summary": {
+    "prefill": {
+      "final_norm": {
+        "calls": 4,
+        "dispatch_ms": 0.013,
+        "sync_ms": 0.833
+      },
+      "full_attention": {
+        "calls": 32,
+        "dispatch_ms": 182.514,
+        "sync_ms": 0.6
+      },
+      "full_attention_cache_update": {
+        "calls": 32,
+        "dispatch_ms": 0.357,
+        "sync_ms": 9.434
+      },
+      "full_attention_k_norm": {
+        "calls": 32,
+        "dispatch_ms": 0.116,
+        "sync_ms": 6.232
+      },
+      "full_attention_k_proj": {
+        "calls": 32,
+        "dispatch_ms": 0.111,
+        "sync_ms": 16.505
+      },
+      "full_attention_o_proj": {
+        "calls": 32,
+        "dispatch_ms": 0.144,
+        "sync_ms": 36.204
+      },
+      "full_attention_q_norm": {
+        "calls": 32,
+        "dispatch_ms": 0.145,
+        "sync_ms": 7.635
+      },
+      "full_attention_q_proj": {
+        "calls": 32,
+        "dispatch_ms": 0.091,
+        "sync_ms": 61.493
+      },
+      "full_attention_rope": {
+        "calls": 32,
+        "dispatch_ms": 1.231,
+        "sync_ms": 12.266
+      },
+      "full_attention_sdpa": {
+        "calls": 32,
+        "dispatch_ms": 0.468,
+        "sync_ms": 11.931
+      },
+      "full_attention_v_proj": {
+        "calls": 32,
+        "dispatch_ms": 0.119,
+        "sync_ms": 16.091
+      },
+      "input_embeddings": {
+        "calls": 4,
+        "dispatch_ms": 0.056,
+        "sync_ms": 109.743
+      },
+      "kv_cache_update": {
+        "calls": 32,
+        "dispatch_ms": 0.357,
+        "sync_ms": 9.434
+      },
+      "linear_attention": {
+        "calls": 96,
+        "dispatch_ms": 686.222,
+        "sync_ms": 1.637
+      },
+      "linear_attention_conv1d": {
+        "calls": 96,
+        "dispatch_ms": 1.038,
+        "sync_ms": 27.893
+      },
+      "linear_attention_gated_delta": {
+        "calls": 96,
+        "dispatch_ms": 3.391,
+        "sync_ms": 53.082
+      },
+      "linear_attention_in_proj_a": {
+        "calls": 96,
+        "dispatch_ms": 0.285,
+        "sync_ms": 34.495
+      },
+      "linear_attention_in_proj_b": {
+        "calls": 96,
+        "dispatch_ms": 0.447,
+        "sync_ms": 36.808
+      },
+      "linear_attention_in_proj_qkv": {
+        "calls": 96,
+        "dispatch_ms": 0.321,
+        "sync_ms": 199.195
+      },
+      "linear_attention_in_proj_z": {
+        "calls": 96,
+        "dispatch_ms": 0.604,
+        "sync_ms": 112.959
+      },
+      "linear_attention_k_norm": {
+        "calls": 96,
+        "dispatch_ms": 0.265,
+        "sync_ms": 20.09
+      },
+      "linear_attention_norm_gated": {
+        "calls": 96,
+        "dispatch_ms": 0.756,
+        "sync_ms": 21.716
+      },
+      "linear_attention_out_proj": {
+        "calls": 96,
+        "dispatch_ms": 0.242,
+        "sync_ms": 110.198
+      },
+      "linear_attention_q_norm": {
+        "calls": 96,
+        "dispatch_ms": 0.464,
+        "sync_ms": 22.679
+      },
+      "linear_cache_conv_state_update": {
+        "calls": 192,
+        "dispatch_ms": 0.575,
+        "sync_ms": 30.375
+      },
+      "linear_cache_rec_state_update": {
+        "calls": 192,
+        "dispatch_ms": 0.05,
+        "sync_ms": 3.197
+      },
+      "linear_cache_update": {
+        "calls": 384,
+        "dispatch_ms": 0.626,
+        "sync_ms": 33.572
+      },
+      "lm_head": {
+        "calls": 4,
+        "dispatch_ms": 0.011,
+        "sync_ms": 156.366
+      },
+      "mlp": {
+        "calls": 128,
+        "dispatch_ms": 1.141,
+        "sync_ms": 991.55
+      },
+      "position_ids": {
+        "calls": 4,
+        "dispatch_ms": 0.096,
+        "sync_ms": 10.846
+      },
+      "rope": {
+        "calls": 32,
+        "dispatch_ms": 1.231,
+        "sync_ms": 12.266
+      },
+      "sampler_sync(argmax/item)": {
+        "calls": 4,
+        "dispatch_ms": 0.024,
+        "sync_ms": 1.453
+      }
+    },
+    "decode": {
+      "final_norm": {
+        "calls": 124,
+        "dispatch_ms": 0.334,
+        "sync_ms": 26.689
+      },
+      "full_attention": {
+        "calls": 992,
+        "dispatch_ms": 3092.399,
+        "sync_ms": 22.183
+      },
+      "full_attention_cache_update": {
+        "calls": 992,
+        "dispatch_ms": 7.364,
+        "sync_ms": 239.57
+      },
+      "full_attention_k_norm": {
+        "calls": 992,
+        "dispatch_ms": 3.114,
+        "sync_ms": 185.307
+      },
+      "full_attention_k_proj": {
+        "calls": 992,
+        "dispatch_ms": 2.598,
+        "sync_ms": 287.829
+      },
+      "full_attention_o_proj": {
+        "calls": 992,
+        "dispatch_ms": 4.015,
+        "sync_ms": 577.154
+      },
+      "full_attention_q_norm": {
+        "calls": 992,
+        "dispatch_ms": 3.433,
+        "sync_ms": 204.558
+      },
+      "full_attention_q_proj": {
+        "calls": 992,
+        "dispatch_ms": 1.964,
+        "sync_ms": 673.472
+      },
+      "full_attention_rope": {
+        "calls": 992,
+        "dispatch_ms": 27.063,
+        "sync_ms": 261.938
+      },
+      "full_attention_sdpa": {
+        "calls": 992,
+        "dispatch_ms": 5.107,
+        "sync_ms": 270.243
+      },
+      "full_attention_v_proj": {
+        "calls": 992,
+        "dispatch_ms": 2.722,
+        "sync_ms": 283.274
+      },
+      "input_embeddings": {
+        "calls": 124,
+        "dispatch_ms": 1.15,
+        "sync_ms": 33.998
+      },
+      "kv_cache_update": {
+        "calls": 992,
+        "dispatch_ms": 7.364,
+        "sync_ms": 239.57
+      },
+      "linear_attention": {
+        "calls": 2976,
+        "dispatch_ms": 10579.075,
+        "sync_ms": 50.262
+      },
+      "linear_attention_conv1d": {
+        "calls": 2976,
+        "dispatch_ms": 17.687,
+        "sync_ms": 576.695
+      },
+      "linear_attention_gated_delta": {
+        "calls": 2976,
+        "dispatch_ms": 73.775,
+        "sync_ms": 779.285
+      },
+      "linear_attention_in_proj_a": {
+        "calls": 2976,
+        "dispatch_ms": 6.999,
+        "sync_ms": 644.522
+      },
+      "linear_attention_in_proj_b": {
+        "calls": 2976,
+        "dispatch_ms": 7.34,
+        "sync_ms": 701.184
+      },
+      "linear_attention_in_proj_qkv": {
+        "calls": 2976,
+        "dispatch_ms": 6.49,
+        "sync_ms": 1989.7
+      },
+      "linear_attention_in_proj_z": {
+        "calls": 2976,
+        "dispatch_ms": 15.742,
+        "sync_ms": 1318.709
+      },
+      "linear_attention_k_norm": {
+        "calls": 2976,
+        "dispatch_ms": 7.378,
+        "sync_ms": 588.27
+      },
+      "linear_attention_norm_gated": {
+        "calls": 2976,
+        "dispatch_ms": 15.729,
+        "sync_ms": 585.006
+      },
+      "linear_attention_out_proj": {
+        "calls": 2976,
+        "dispatch_ms": 6.797,
+        "sync_ms": 1816.204
+      },
+      "linear_attention_q_norm": {
+        "calls": 2976,
+        "dispatch_ms": 8.752,
+        "sync_ms": 579.539
+      },
+      "linear_cache_conv_state_update": {
+        "calls": 5952,
+        "dispatch_ms": 8.97,
+        "sync_ms": 614.983
+      },
+      "linear_cache_rec_state_update": {
+        "calls": 5952,
+        "dispatch_ms": 3.712,
+        "sync_ms": 100.203
+      },
+      "linear_cache_update": {
+        "calls": 11904,
+        "dispatch_ms": 12.684,
+        "sync_ms": 715.187
+      },
+      "lm_head": {
+        "calls": 124,
+        "dispatch_ms": 0.315,
+        "sync_ms": 1382.974
+      },
+      "mlp": {
+        "calls": 3968,
+        "dispatch_ms": 26.533,
+        "sync_ms": 8314.814
+      },
+      "position_ids": {
+        "calls": 124,
+        "dispatch_ms": 1.903,
+        "sync_ms": 27.31
+      },
+      "rope": {
+        "calls": 992,
+        "dispatch_ms": 27.063,
+        "sync_ms": 261.938
+      },
+      "sampler_sync(argmax/item)": {
+        "calls": 124,
+        "dispatch_ms": 0.257,
+        "sync_ms": 40.172
+      }
+    }
+  }
+}

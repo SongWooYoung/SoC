@@ -1,0 +1,209 @@
+{
+  "generated_at": "2026-04-05T01:30:31",
+  "token_id": 42,
+  "warmup": 5,
+  "iterations": 50,
+  "hidden_dtype": "mlx.core.bfloat16",
+  "mlp_average": {
+    "dispatch_ms": 0.009,
+    "sync_ms": 1.975
+  },
+  "mlp_layers": [
+    {
+      "layer_index": 0,
+      "layer_type": "linear",
+      "dispatch_ms": 0.007,
+      "sync_ms": 2.014
+    },
+    {
+      "layer_index": 1,
+      "layer_type": "linear",
+      "dispatch_ms": 0.007,
+      "sync_ms": 1.951
+    },
+    {
+      "layer_index": 2,
+      "layer_type": "linear",
+      "dispatch_ms": 0.012,
+      "sync_ms": 2.113
+    },
+    {
+      "layer_index": 3,
+      "layer_type": "full_attention",
+      "dispatch_ms": 0.008,
+      "sync_ms": 1.954
+    },
+    {
+      "layer_index": 4,
+      "layer_type": "linear",
+      "dispatch_ms": 0.01,
+      "sync_ms": 1.968
+    },
+    {
+      "layer_index": 5,
+      "layer_type": "linear",
+      "dispatch_ms": 0.011,
+      "sync_ms": 2.023
+    },
+    {
+      "layer_index": 6,
+      "layer_type": "linear",
+      "dispatch_ms": 0.008,
+      "sync_ms": 1.969
+    },
+    {
+      "layer_index": 7,
+      "layer_type": "full_attention",
+      "dispatch_ms": 0.008,
+      "sync_ms": 1.965
+    },
+    {
+      "layer_index": 8,
+      "layer_type": "linear",
+      "dispatch_ms": 0.007,
+      "sync_ms": 1.963
+    },
+    {
+      "layer_index": 9,
+      "layer_type": "linear",
+      "dispatch_ms": 0.007,
+      "sync_ms": 1.925
+    },
+    {
+      "layer_index": 10,
+      "layer_type": "linear",
+      "dispatch_ms": 0.008,
+      "sync_ms": 2.017
+    },
+    {
+      "layer_index": 11,
+      "layer_type": "full_attention",
+      "dispatch_ms": 0.01,
+      "sync_ms": 1.935
+    },
+    {
+      "layer_index": 12,
+      "layer_type": "linear",
+      "dispatch_ms": 0.009,
+      "sync_ms": 1.927
+    },
+    {
+      "layer_index": 13,
+      "layer_type": "linear",
+      "dispatch_ms": 0.007,
+      "sync_ms": 1.966
+    },
+    {
+      "layer_index": 14,
+      "layer_type": "linear",
+      "dispatch_ms": 0.009,
+      "sync_ms": 1.975
+    },
+    {
+      "layer_index": 15,
+      "layer_type": "full_attention",
+      "dispatch_ms": 0.007,
+      "sync_ms": 2.008
+    },
+    {
+      "layer_index": 16,
+      "layer_type": "linear",
+      "dispatch_ms": 0.007,
+      "sync_ms": 1.945
+    },
+    {
+      "layer_index": 17,
+      "layer_type": "linear",
+      "dispatch_ms": 0.007,
+      "sync_ms": 1.931
+    },
+    {
+      "layer_index": 18,
+      "layer_type": "linear",
+      "dispatch_ms": 0.008,
+      "sync_ms": 1.923
+    },
+    {
+      "layer_index": 19,
+      "layer_type": "full_attention",
+      "dispatch_ms": 0.014,
+      "sync_ms": 2.189
+    },
+    {
+      "layer_index": 20,
+      "layer_type": "linear",
+      "dispatch_ms": 0.008,
+      "sync_ms": 1.965
+    },
+    {
+      "layer_index": 21,
+      "layer_type": "linear",
+      "dispatch_ms": 0.011,
+      "sync_ms": 1.969
+    },
+    {
+      "layer_index": 22,
+      "layer_type": "linear",
+      "dispatch_ms": 0.009,
+      "sync_ms": 1.954
+    },
+    {
+      "layer_index": 23,
+      "layer_type": "full_attention",
+      "dispatch_ms": 0.008,
+      "sync_ms": 1.94
+    },
+    {
+      "layer_index": 24,
+      "layer_type": "linear",
+      "dispatch_ms": 0.008,
+      "sync_ms": 1.933
+    },
+    {
+      "layer_index": 25,
+      "layer_type": "linear",
+      "dispatch_ms": 0.007,
+      "sync_ms": 1.96
+    },
+    {
+      "layer_index": 26,
+      "layer_type": "linear",
+      "dispatch_ms": 0.008,
+      "sync_ms": 1.945
+    },
+    {
+      "layer_index": 27,
+      "layer_type": "full_attention",
+      "dispatch_ms": 0.008,
+      "sync_ms": 2.061
+    },
+    {
+      "layer_index": 28,
+      "layer_type": "linear",
+      "dispatch_ms": 0.008,
+      "sync_ms": 1.978
+    },
+    {
+      "layer_index": 29,
+      "layer_type": "linear",
+      "dispatch_ms": 0.01,
+      "sync_ms": 1.928
+    },
+    {
+      "layer_index": 30,
+      "layer_type": "linear",
+      "dispatch_ms": 0.009,
+      "sync_ms": 1.957
+    },
+    {
+      "layer_index": 31,
+      "layer_type": "full_attention",
+      "dispatch_ms": 0.009,
+      "sync_ms": 1.964
+    }
+  ],
+  "lm_head_decode": {
+    "dispatch_ms": 0.018,
+    "sync_ms": 11.504
+  }
+}

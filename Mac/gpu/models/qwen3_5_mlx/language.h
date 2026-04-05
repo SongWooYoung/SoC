@@ -149,6 +149,34 @@ inline void sync_result(const char* stage, const std::pair<mx::array, mx::array>
 	add_sync_ms(stage, elapsed_ms(start));
 }
 
+inline void sync_result_multi(std::initializer_list<const char*> stages, const mx::array& value) {
+	if (!is_active()) {
+		return;
+	}
+	auto start = std::chrono::steady_clock::now();
+	mx::eval(value);
+	mx::synchronize();
+	auto sync_ms = elapsed_ms(start);
+	for (const char* stage : stages) {
+		add_sync_ms(stage, sync_ms);
+	}
+}
+
+inline void sync_result_multi(
+	std::initializer_list<const char*> stages,
+	const std::pair<mx::array, mx::array>& value) {
+	if (!is_active()) {
+		return;
+	}
+	auto start = std::chrono::steady_clock::now();
+	mx::eval(value.first, value.second);
+	mx::synchronize();
+	auto sync_ms = elapsed_ms(start);
+	for (const char* stage : stages) {
+		add_sync_ms(stage, sync_ms);
+	}
+}
+
 template <typename Fn>
 inline auto record_stage(const char* stage, Fn&& fn) -> decltype(fn()) {
 	if (!is_active()) {
@@ -162,6 +190,26 @@ inline auto record_stage(const char* stage, Fn&& fn) -> decltype(fn()) {
 	return result;
 }
 
+template <typename Fn>
+inline auto record_stage_aliases(
+	std::initializer_list<const char*> stages,
+	Fn&& fn) -> decltype(fn()) {
+	if (!is_active()) {
+		return fn();
+	}
+	for (const char* stage : stages) {
+		mark_call(stage);
+	}
+	auto start = std::chrono::steady_clock::now();
+	auto result = fn();
+	auto dispatch_ms = elapsed_ms(start);
+	for (const char* stage : stages) {
+		add_dispatch_ms(stage, dispatch_ms);
+	}
+	sync_result_multi(stages, result);
+	return result;
+}
+
 } // namespace stage_trace
 
 namespace runtime_options {
@@ -171,7 +219,13 @@ enum class LinearCacheMode {
 	ArraysStyle,
 };
 
+enum class FullAttentionCacheMode {
+	Legacy,
+	StepBuffer,
+};
+
 inline LinearCacheMode linear_cache_mode = LinearCacheMode::Legacy;
+inline FullAttentionCacheMode full_attention_cache_mode = FullAttentionCacheMode::Legacy;
 
 inline void set_linear_cache_mode(LinearCacheMode mode) {
 	linear_cache_mode = mode;
@@ -181,10 +235,26 @@ inline LinearCacheMode get_linear_cache_mode() {
 	return linear_cache_mode;
 }
 
+inline void set_full_attention_cache_mode(FullAttentionCacheMode mode) {
+	full_attention_cache_mode = mode;
+}
+
+inline FullAttentionCacheMode get_full_attention_cache_mode() {
+	return full_attention_cache_mode;
+}
+
 inline const char* linear_cache_mode_name(LinearCacheMode mode) {
 	switch (mode) {
 		case LinearCacheMode::ArraysStyle: return "arrays";
 		case LinearCacheMode::Legacy:
+		default: return "legacy";
+	}
+}
+
+inline const char* full_attention_cache_mode_name(FullAttentionCacheMode mode) {
+	switch (mode) {
+		case FullAttentionCacheMode::StepBuffer: return "step_buffer";
+		case FullAttentionCacheMode::Legacy:
 		default: return "legacy";
 	}
 }
@@ -207,7 +277,7 @@ struct RotaryEmbedding {
 	}
 
 	std::pair<mx::array, mx::array> operator()(mx::Dtype dtype, mx::array position_ids) const {
-		return stage_trace::record_stage("rope", [&]() {
+		return stage_trace::record_stage_aliases({"rope", "full_attention_rope"}, [&]() {
 			if (position_ids.ndim() == 2) {
 				position_ids = mx::broadcast_to(
 					mx::expand_dims(position_ids, 0),
@@ -294,6 +364,7 @@ struct KVCache {
 	std::optional<mx::array> keys;
 	std::optional<mx::array> values;
 	int offset = 0;
+	static constexpr int step = 256;
 
 	bool empty() const {
 		return !keys.has_value() || !values.has_value();
@@ -302,7 +373,50 @@ struct KVCache {
 	std::pair<mx::array, mx::array> update_and_fetch(
 		const mx::array& new_keys,
 		const mx::array& new_values) {
-		return stage_trace::record_stage("kv_cache_update", [&]() {
+		return stage_trace::record_stage_aliases({"kv_cache_update", "full_attention_cache_update"}, [&]() {
+			if (runtime_options::get_full_attention_cache_mode() == runtime_options::FullAttentionCacheMode::StepBuffer) {
+				const int prev = offset;
+				const int new_tokens = new_keys.shape(2);
+				if (empty() || (prev + new_tokens) > keys->shape(2)) {
+					int batch = new_keys.shape(0);
+					int num_kv_heads = new_keys.shape(1);
+					int k_head_dim = new_keys.shape(3);
+					int v_head_dim = new_values.shape(3);
+					int alloc_tokens = ((step + new_tokens - 1) / step) * step;
+					auto new_k = mx::zeros({batch, num_kv_heads, alloc_tokens, k_head_dim}, new_keys.dtype());
+					auto new_v = mx::zeros({batch, num_kv_heads, alloc_tokens, v_head_dim}, new_values.dtype());
+					if (!empty()) {
+						if (prev % step != 0) {
+							keys = mlx_helpers::slice_axis(*keys, 2, 0, prev);
+							values = mlx_helpers::slice_axis(*values, 2, 0, prev);
+						}
+						keys = mx::concatenate({*keys, new_k}, 2);
+						values = mx::concatenate({*values, new_v}, 2);
+					} else {
+						keys = new_k;
+						values = new_v;
+					}
+				}
+
+				offset += new_tokens;
+				keys = mx::slice_update(
+					*keys,
+					new_keys,
+					{0, 0, prev, 0},
+					{new_keys.shape(0), new_keys.shape(1), offset, new_keys.shape(3)},
+					{1, 1, 1, 1});
+				values = mx::slice_update(
+					*values,
+					new_values,
+					{0, 0, prev, 0},
+					{new_values.shape(0), new_values.shape(1), offset, new_values.shape(3)},
+					{1, 1, 1, 1});
+				return std::pair<mx::array, mx::array>{
+					mlx_helpers::slice_axis(*keys, 2, 0, offset),
+					mlx_helpers::slice_axis(*values, 2, 0, offset),
+				};
+			}
+
 			if (empty()) {
 				keys = new_keys;
 				values = new_values;
@@ -382,21 +496,31 @@ struct Attention {
 			int batch = x.shape(0);
 			int seq_len = x.shape(1);
 
-			auto q_proj_out = mlx_helpers::linear(x, q_proj_w);
+			auto q_proj_out = stage_trace::record_stage("full_attention_q_proj", [&]() {
+				return mlx_helpers::linear(x, q_proj_w);
+			});
 			q_proj_out = mx::reshape(q_proj_out, {batch, seq_len, num_heads, head_dim * 2});
 			auto q_parts = mx::split(q_proj_out, 2, 3);
 			auto queries = q_parts[0];
 			auto gate = mx::reshape(q_parts[1], {batch, seq_len, num_heads * head_dim});
 
-			auto keys = mx::reshape(
-				mlx_helpers::linear(x, k_proj_w),
-				{batch, seq_len, num_kv_heads, head_dim});
-			auto values = mx::reshape(
-				mlx_helpers::linear(x, v_proj_w),
-				{batch, seq_len, num_kv_heads, head_dim});
+			auto keys = stage_trace::record_stage("full_attention_k_proj", [&]() {
+				return mx::reshape(
+					mlx_helpers::linear(x, k_proj_w),
+					{batch, seq_len, num_kv_heads, head_dim});
+			});
+			auto values = stage_trace::record_stage("full_attention_v_proj", [&]() {
+				return mx::reshape(
+					mlx_helpers::linear(x, v_proj_w),
+					{batch, seq_len, num_kv_heads, head_dim});
+			});
 
-			queries = mx::fast::rms_norm(queries, q_norm_w, norm_eps);
-			keys = mx::fast::rms_norm(keys, k_norm_w, norm_eps);
+			queries = stage_trace::record_stage("full_attention_q_norm", [&]() {
+				return mx::fast::rms_norm(queries, q_norm_w, norm_eps);
+			});
+			keys = stage_trace::record_stage("full_attention_k_norm", [&]() {
+				return mx::fast::rms_norm(keys, k_norm_w, norm_eps);
+			});
 
 			queries = mx::transpose(queries, {0, 2, 1, 3});
 			keys = mx::transpose(keys, {0, 2, 1, 3});
@@ -408,12 +532,16 @@ struct Attention {
 
 			auto [full_k, full_v] = cache.update_and_fetch(rotated_k, values);
 
-			auto output = mask.has_value()
-				? mx::fast::scaled_dot_product_attention(rotated_q, full_k, full_v, scale, "array", *mask)
-				: mx::fast::scaled_dot_product_attention(rotated_q, full_k, full_v, scale, "causal");
+			auto output = stage_trace::record_stage("full_attention_sdpa", [&]() {
+				return mask.has_value()
+					? mx::fast::scaled_dot_product_attention(rotated_q, full_k, full_v, scale, "array", *mask)
+					: mx::fast::scaled_dot_product_attention(rotated_q, full_k, full_v, scale, "causal");
+			});
 			output = mx::transpose(output, {0, 2, 1, 3});
 			output = mx::reshape(output, {batch, seq_len, num_heads * head_dim});
-			return mlx_helpers::linear(output * mx::sigmoid(gate), o_proj_w);
+			return stage_trace::record_stage("full_attention_o_proj", [&]() {
+				return mlx_helpers::linear(output * mx::sigmoid(gate), o_proj_w);
+			});
 		});
 	}
 };
@@ -447,11 +575,19 @@ struct GatedDeltaNet {
 			int batch = inputs.shape(0);
 			int seq_len = inputs.shape(1);
 
-			auto mixed_qkv = mlx_helpers::linear(inputs, in_proj_qkv_w);
-			auto z = mx::reshape(mlx_helpers::linear(inputs, in_proj_z_w),
-				{batch, seq_len, num_v_heads, head_v_dim});
-			auto b = mlx_helpers::linear(inputs, in_proj_b_w);
-			auto a = mlx_helpers::linear(inputs, in_proj_a_w);
+			auto mixed_qkv = stage_trace::record_stage("linear_attention_in_proj_qkv", [&]() {
+				return mlx_helpers::linear(inputs, in_proj_qkv_w);
+			});
+			auto z = stage_trace::record_stage("linear_attention_in_proj_z", [&]() {
+				return mx::reshape(mlx_helpers::linear(inputs, in_proj_z_w),
+					{batch, seq_len, num_v_heads, head_v_dim});
+			});
+			auto b = stage_trace::record_stage("linear_attention_in_proj_b", [&]() {
+				return mlx_helpers::linear(inputs, in_proj_b_w);
+			});
+			auto a = stage_trace::record_stage("linear_attention_in_proj_a", [&]() {
+				return mlx_helpers::linear(inputs, in_proj_a_w);
+			});
 
 			mx::array conv_state = cache.conv_state.value_or(
 				mx::zeros({batch, conv_kernel_size - 1, conv_dim}, inputs.dtype()));
@@ -463,7 +599,7 @@ struct GatedDeltaNet {
 			}
 
 			auto conv_input = mx::concatenate({conv_state, mixed_qkv}, 1);
-			stage_trace::record_stage("linear_cache_update", [&]() {
+			stage_trace::record_stage_aliases({"linear_cache_update", "linear_cache_conv_state_update"}, [&]() {
 				const int n_keep = conv_kernel_size - 1;
 				const int token_count = inputs.shape(1);
 				if (runtime_options::get_linear_cache_mode() == runtime_options::LinearCacheMode::ArraysStyle) {
@@ -491,8 +627,10 @@ struct GatedDeltaNet {
 				}
 				return *cache.conv_state;
 			});
-			auto conv_out = mlx_helpers::silu(
-				mx::conv1d(conv_input, conv1d_w, 1, 0, 1, conv_dim));
+			auto conv_out = stage_trace::record_stage("linear_attention_conv1d", [&]() {
+				return mlx_helpers::silu(
+					mx::conv1d(conv_input, conv1d_w, 1, 0, 1, conv_dim));
+			});
 
 			auto qkv_parts = mx::split(conv_out, {key_dim, key_dim * 2}, conv_out.ndim() - 1);
 			auto q = mx::reshape(qkv_parts[0], {batch, seq_len, num_k_heads, head_k_dim});
@@ -500,21 +638,31 @@ struct GatedDeltaNet {
 			auto v = mx::reshape(qkv_parts[2], {batch, seq_len, num_v_heads, head_v_dim});
 
 			float inv_scale = std::pow(static_cast<float>(head_k_dim), -0.5f);
-			q = (inv_scale * inv_scale) * mx::fast::rms_norm(q, std::nullopt, 1e-6f);
-			k = inv_scale * mx::fast::rms_norm(k, std::nullopt, 1e-6f);
+			q = stage_trace::record_stage("linear_attention_q_norm", [&]() {
+				return (inv_scale * inv_scale) * mx::fast::rms_norm(q, std::nullopt, 1e-6f);
+			});
+			k = stage_trace::record_stage("linear_attention_k_norm", [&]() {
+				return inv_scale * mx::fast::rms_norm(k, std::nullopt, 1e-6f);
+			});
 
 			auto rec_state = cache.rec_state;
-			auto [out, next_state] = gated_delta_update(
-				q, k, v, a, b, A_log, dt_bias, rec_state, mask, true);
-			stage_trace::record_stage("linear_cache_update", [&]() {
+			auto [out, next_state] = stage_trace::record_stage("linear_attention_gated_delta", [&]() {
+				return gated_delta_update(
+					q, k, v, a, b, A_log, dt_bias, rec_state, mask, true);
+			});
+			stage_trace::record_stage_aliases({"linear_cache_update", "linear_cache_rec_state_update"}, [&]() {
 				cache.rec_state = next_state;
 				return *cache.rec_state;
 			});
 
 			RMSNormGated norm{norm_w, norm_eps};
-			out = norm.forward(out, z);
+			out = stage_trace::record_stage("linear_attention_norm_gated", [&]() {
+				return norm.forward(out, z);
+			});
 			out = mx::reshape(out, {batch, seq_len, value_dim});
-			return mlx_helpers::linear(out, out_proj_w);
+			return stage_trace::record_stage("linear_attention_out_proj", [&]() {
+				return mlx_helpers::linear(out, out_proj_w);
+			});
 		});
 	}
 };
