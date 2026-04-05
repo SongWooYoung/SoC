@@ -1,5 +1,8 @@
 mlx-vlm의 코드를 mac mini M4, 32GB (System on Chip + Unified Memory)에 최대한 최적화를 시키면 성능을 얼마나 향상 시킬 수 있을 지 궁금함 
 
+TurboQuant 기반 full-attention KV 압축 설계 문서:
+- `Mac/gpu/plan/optimization/turboquant_integration_design.md`
+
 base : Qwen3.5-9B-MLX-8bit
 내가 수정할것: qwen3_5_mlx 
 
